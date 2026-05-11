@@ -1,0 +1,19 @@
+# Snippet for OpenCTI admins: paste this `connector-whisper` service into
+# your existing OpenCTI docker-compose to register the Whisper connector.
+# For local development, use docker-compose.dev.yml instead.
+
+services:
+  connector-whisper:
+    image: whisper-sec/whisper-opencti:latest
+    restart: unless-stopped
+    environment:
+      - OPENCTI_URL=${OPENCTI_URL}
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_ID}
+      - CONNECTOR_TYPE=INTERNAL_ENRICHMENT
+      - CONNECTOR_NAME=Whisper
+      - CONNECTOR_SCOPE=IPv4-Addr,IPv6-Addr,Domain-Name,Url,StixFile
+      - CONNECTOR_AUTO=false
+      - CONNECTOR_LOG_LEVEL=info
+      - WHISPER_API_URL=${WHISPER_API_URL}
+      - WHISPER_API_KEY=${WHISPER_API_KEY}
