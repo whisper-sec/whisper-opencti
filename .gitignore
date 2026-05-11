@@ -44,3 +44,6 @@ config.yml
 # Logs
 *.log
 logs/
+
+# Claude Code harness state
+.claude/
