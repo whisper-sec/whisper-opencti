@@ -70,7 +70,7 @@ item) and the user-visible state in the UI.
 | **TC-06** | No Whisper data | Create `IPv4-Addr 192.0.2.1`, enrich | Status `No Whisper data for 192.0.2.1`. No new relationships in the UI. |
 | **TC-07** | Empty value | Create observable with missing `value` (edge case via API) | Status contains `no value to enrich`. |
 | **TC-08** | Bad API key | Set `WHISPER_API_KEY=invalid` in env, restart, enrich any seed | Work item marked **Failed**. Logs show `WhisperAuthError`. |
-| **TC-09** | Whisper unreachable | Block `mcp.whisper.security`/`api.whisper.security` at the firewall, enrich any seed | Work item marked **Failed** after retries. Logs show `WhisperTransportError`. |
+| **TC-09** | Whisper unreachable | Block `graph.whisper.security` at the firewall, enrich any seed | Work item marked **Failed** after retries. Logs show `WhisperTransportError`. |
 | **TC-10** | Re-enrich idempotency | Run TC-01 twice in a row | Same `domain-name` / `ipv4-addr` SCO IDs both times. Existing entities are updated, not duplicated. |
 | **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. FEED_SOURCE / CITY / COUNTRY etc. neighbours are absent (parser-dropped). |
 | **TC-12** | Connector restart | `make dev-restart` mid-enrichment of a slow query | Connector re-registers cleanly; the in-flight work item is retried by OpenCTI. |
