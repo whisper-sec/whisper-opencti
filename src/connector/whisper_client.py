@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 import requests
@@ -17,6 +18,19 @@ DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF = 0.5
 CYPHER_PATH = "/api/query"
+
+
+@dataclass(frozen=True)
+class CypherResult:
+    """One execution of a Cypher query against the Whisper graph.
+
+    `columns` is the ordered list of RETURN aliases (e.g. ["n", "r", "m"]).
+    The result parser needs this to pair edges with their surrounding nodes.
+    """
+
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    statistics: dict[str, Any] = field(default_factory=dict)
 
 
 class WhisperClient:
@@ -71,11 +85,13 @@ class WhisperClient:
         self,
         query: str,
         params: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Execute a Cypher query and return the result rows.
+    ) -> CypherResult:
+        """Execute a Cypher query and return the parsed result.
 
-        Result rows are a list of dicts; the shape of each row matches what
-        the Whisper API returns (typically keyed by Cypher RETURN aliases).
+        Whisper returns a JSON body of shape
+        ``{"success": bool, "columns": [...], "rows": [...], "statistics": {...}}``.
+        Each row is a dict keyed by RETURN alias; cell values are either node
+        objects (``{nodeId, label, name, ...}``) or edge objects (``{type, ...}``).
         """
         url = f"{self.api_url}{CYPHER_PATH}"
         payload: dict[str, Any] = {"query": query, "params": params or {}}
@@ -111,12 +127,25 @@ class WhisperClient:
         except ValueError as exc:
             raise WhisperQueryError(f"Whisper API returned non-JSON body: {exc}") from exc
 
-        rows = body.get("results", body.get("data", []))
+        if body.get("success") is False:
+            raise WhisperQueryError(
+                f"Whisper API returned success=false: {body.get('error', body)!r}"
+            )
+
+        rows = body.get("rows", [])
         if not isinstance(rows, list):
             raise WhisperQueryError(
-                f"Whisper API returned unexpected result shape: {type(rows).__name__}"
+                f"Whisper API returned unexpected 'rows' shape: {type(rows).__name__}"
             )
-        return rows
+        columns = body.get("columns") or []
+        if not isinstance(columns, list):
+            raise WhisperQueryError(
+                f"Whisper API returned unexpected 'columns' shape: {type(columns).__name__}"
+            )
+        statistics = body.get("statistics") or {}
+        if not isinstance(statistics, dict):
+            statistics = {}
+        return CypherResult(columns=columns, rows=rows, statistics=statistics)
 
     def close(self) -> None:
         self._session.close()
