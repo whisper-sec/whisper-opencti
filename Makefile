@@ -1,4 +1,4 @@
-.PHONY: help dev-up dev-down dev-restart dev-logs dev-status dev-clean
+.PHONY: help dev-up dev-down dev-restart dev-logs dev-status dev-clean test lint
 
 ENV_FILE ?= .env.dev
 COMPOSE  := docker compose --env-file $(ENV_FILE) -f docker-compose.dev.yml
@@ -27,3 +27,10 @@ dev-status: ## Show status of dev stack services
 
 dev-clean: ## Stop the dev stack AND remove volumes (fresh state)
 	$(COMPOSE) down -v
+
+test: ## Run unit tests (assumes `pip install -r requirements.txt -r requirements-dev.txt`)
+	pytest
+
+lint: ## Run ruff lint + format check
+	ruff check src/ tests/
+	ruff format --check src/ tests/
