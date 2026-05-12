@@ -137,7 +137,7 @@ also accepted in a mounted `config.yml` (see [config.yml.sample](./config.yml.sa
 
 | Env var | Required | Default | Description |
 | --- | --- | --- | --- |
-| `WHISPER_API_URL` | yes | - | Base URL of the Whisper API, typically `https://api.whisper.security`. The connector POSTs Cypher queries to `<api_url>/api/query`. |
+| `WHISPER_API_URL` | yes | - | Base URL of the Whisper graph API, typically `https://graph.whisper.security`. The connector POSTs Cypher queries to `<api_url>/api/query`. |
 | `WHISPER_API_KEY` | yes | - | Your Whisper API key. Sent in the `X-API-Key` header on every request. Never logged. |
 
 ## Troubleshooting
