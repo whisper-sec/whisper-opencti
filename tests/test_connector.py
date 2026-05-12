@@ -107,7 +107,9 @@ def test_process_message_enriches_ipv4_with_resolves_to_hostname(connector, help
     assert rel["target_ref"].startswith("ipv4-addr--")
 
 
-def test_process_message_uses_default_limit_param(connector, helper, client):
+def test_process_message_inlines_value_and_limit_into_query(connector, helper, client):
+    # Whisper rejects parameterised queries entirely — both $value and $limit
+    # are substituted client-side as Cypher literals.
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
@@ -118,10 +120,13 @@ def test_process_message_uses_default_limit_param(connector, helper, client):
     )
     connector._process_message({"entity_id": "ipv4--x"})
     args, _kwargs = client.execute_cypher.call_args
-    query, params = args
-    assert "$value" in query and "$limit" in query
-    assert params["value"] == "8.8.8.8"
-    assert params["limit"] >= 1
+    query = args[0]
+    assert "$value" not in query
+    assert "$limit" not in query
+    assert '"8.8.8.8"' in query
+    assert "LIMIT " in query
+    # execute_cypher called with no params dict (single positional arg).
+    assert len(args) == 1
 
 
 def test_process_message_drops_unmappable_neighbor_but_still_sends_seed(connector, helper, client):
@@ -173,8 +178,8 @@ def test_process_message_accepts_observable_value_or_value_field(connector, help
         columns=["n", "r", "m"], rows=[], statistics={}
     )
     result = connector._process_message({"entity_id": "domain-name--x"})
-    # Should have called execute_cypher with the "value" field's value.
+    # Should have inlined the "value" field's value as a Cypher literal.
     assert "No Whisper data for example.test" in result
     client.execute_cypher.assert_called_once()
-    _query, params = client.execute_cypher.call_args[0]
-    assert params["value"] == "example.test"
+    query = client.execute_cypher.call_args[0][0]
+    assert '"example.test"' in query
