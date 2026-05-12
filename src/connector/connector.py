@@ -60,7 +60,7 @@ class WhisperConnector:
         if not entity_value:
             return f"observable {observable.get('id')!r} has no value to enrich"
 
-        query = get_query_for_entity_type(entity_type)
+        query = get_query_for_entity_type(entity_type, value=entity_value, limit=DEFAULT_LIMIT)
         if query is None:
             return f"entity type {entity_type!r} not supported by Whisper enrichment"
 
@@ -74,9 +74,7 @@ class WhisperConnector:
         )
 
         try:
-            result = self.client.execute_cypher(
-                query, {"value": entity_value, "limit": DEFAULT_LIMIT}
-            )
+            result = self.client.execute_cypher(query)
         except WhisperClientError as exc:
             self.helper.connector_logger.error(
                 "Whisper query failed",
