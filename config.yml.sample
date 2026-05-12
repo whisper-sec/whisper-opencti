@@ -11,5 +11,5 @@ connector:
   log_level: "info"
 
 whisper:
-  api_url: "https://api.whisper.security"
+  api_url: "https://graph.whisper.security"
   api_key: "ChangeMe"
