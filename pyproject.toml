@@ -10,7 +10,7 @@ license = { text = "Proprietary" }
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = [
@@ -25,3 +25,8 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "src/main.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
