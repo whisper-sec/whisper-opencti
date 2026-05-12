@@ -12,3 +12,7 @@ class WhisperTransportError(WhisperClientError):
 
 class WhisperQueryError(WhisperClientError):
     """Whisper API returned a query-level error (HTTP 4xx other than auth)."""
+
+
+class StixMappingError(Exception):
+    """Raised when a Whisper node/edge can't be mapped to a STIX object."""
