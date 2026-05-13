@@ -181,7 +181,7 @@ Concrete trace for `IPv4-Addr 8.8.8.8`:
 
 Two layers, env vars override YAML:
 
-- **Env vars** — primary. See `.env.sample` for the production set, `.env.dev` for committed dev defaults.
+- **Env vars** — primary. See [.env.example](.env.example) for the unified template (covers both dev overrides and production setup; comments inside explain which to set for each case). [.env.dev](.env.dev) holds the committed local-stack defaults.
 - **`config.yml`** — optional, loaded from the repo root if present. See [config.yml.sample](config.yml.sample). Shape mirrors the env-var structure under `opencti:` / `connector:` / `whisper:` keys.
 
 Resolution happens in `WhisperConnector.__init__` via `pycti.get_config_variable(env_name, yaml_path, config)`. Tests bypass this entirely by injecting `helper` and `client` directly.
