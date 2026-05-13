@@ -97,22 +97,46 @@ See [docs/scenarios/](./docs/scenarios/) for three worked walk-throughs.
 
 For an OpenCTI instance you already operate:
 
-### 1. Build and publish the image
+### 1. Pull the image
 
-The repo's [Dockerfile](./Dockerfile) builds a self-contained image. Tag and
-push it to your private registry (the connector is currently licensed for
-internal Whisper Security use only — see [LICENSE](./LICENSE)).
+Images are published to GitHub Container Registry (GHCR) on every tagged
+release. The package is **private** to the `whisper-sec` org (the connector is
+licensed for internal Whisper Security use only — see [LICENSE](./LICENSE)),
+so you need a GitHub personal access token with the `read:packages` scope
+and `docker login`:
 
 ```bash
-docker build -t your-registry.example.com/whisper-opencti:0.1.0 .
-docker push your-registry.example.com/whisper-opencti:0.1.0
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <your-github-username> --password-stdin
+docker pull ghcr.io/whisper-sec/whisper-opencti:v0.1.0
+```
+
+Available tags:
+
+| Tag | Use when |
+| --- | --- |
+| `vMAJOR.MINOR.PATCH` (e.g. `v0.1.0`) | Production — pin to a specific release. |
+| `latest` | Most recent published release. Only if you accept automatic updates on `docker pull`. |
+
+To confirm what's running:
+
+```bash
+docker inspect ghcr.io/whisper-sec/whisper-opencti:v0.1.0 \
+  | jq -r '.[0].Config.Labels."org.opencontainers.image.version"'
+```
+
+If you need to build from source instead (customising the image, debugging),
+the Dockerfile accepts a `VERSION` build arg that's baked into the
+`org.opencontainers.image.version` label:
+
+```bash
+docker build --build-arg VERSION=0.1.0-custom -t whisper-opencti:custom .
 ```
 
 ### 2. Drop the connector service into your existing compose
 
 Paste the [`docker-compose.yml`](./docker-compose.yml) snippet into your
-existing OpenCTI compose, update `image:` to the tag you just pushed, and set
-the env vars below. The connector container needs network access to your
+existing OpenCTI compose, update `image:` to the GHCR tag you just pulled, and
+set the env vars below. The connector container needs network access to your
 OpenCTI platform service (default port 8080) and outbound HTTPS to Whisper.
 
 ### 3. Configure
