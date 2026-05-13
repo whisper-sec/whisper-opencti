@@ -1,0 +1,148 @@
+# QA hand-off - whisper-opencti MVP
+
+Everything QA needs to start testing the connector. Read top-to-bottom on
+first pass; bookmark the test matrix and severity guide for repeat reference.
+
+## 1. Setup
+
+### 1.1 Local environment
+
+Follow the [local dev stack quickstart](../README.md#quickstart--local-dev-stack)
+in the project README. The short version:
+
+```bash
+make dev-up
+```
+
+Then drop a real `WHISPER_API_KEY` into [.env.dev](../.env.dev) (currently
+`dev-placeholder-key`) and `make dev-restart`. Without a real key every
+enrichment fails with `WhisperAuthError`.
+
+### 1.2 Sanity check
+
+Before running any test cases, confirm the green-path baseline works:
+
+1. <http://localhost:8080> → log in as `admin@whisper.local` / `ChangeMe-dev-only`.
+2. **Data → Ingestion → Connectors** → `Whisper` shows `Started`, scope
+   `IPv4-Addr, IPv6-Addr, Domain-Name`.
+3. **Data → Observations → Observables → Create**: `IPv4-Addr`, value
+   `8.8.8.8`.
+4. Click into the observable, **Enrichment** panel → **Whisper**.
+5. Within a few seconds **Knowledge → Relationships** should populate.
+
+If step 5 doesn't happen, check the connector's most recent work item under
+**Data → Connectors → Whisper** - the status string from the callback is
+recorded there.
+
+## 2. Test data
+
+Use these indicators for repeatable runs. They're stable enough across days
+that the expected outcomes shouldn't shift wildly week-to-week.
+
+| Entity type | Value | Expected outcome |
+| --- | --- | --- |
+| `IPv4-Addr` | `8.8.8.8` | Multiple `related-to` relationships to other entities (DNS infrastructure). |
+| `IPv4-Addr` | `1.1.1.1` | Multiple `related-to` relationships, mostly to domains the IP is a nameserver for. |
+| `IPv4-Addr` | `192.0.2.1` (TEST-NET-1, RFC 5737) | No Whisper data → status string `No Whisper data for 192.0.2.1`, no relationships added. |
+| `IPv6-Addr` | `2001:4860:4860::8888` | At least one related entity. |
+| `Domain-Name` | `dns.google` | DNS + NAMESERVER_FOR pivot ([scenario 1](./scenarios/01-domain-dns-pivot.md)). |
+| `Domain-Name` | `malware-traffic-analysis.net` | LINKS_TO pivot, FEED_SOURCE neighbours dropped silently ([scenario 3](./scenarios/03-threat-intel-pivot.md)). |
+| `Domain-Name` | `this-should-never-exist-12345.invalid` | No Whisper data. |
+| `Url` (out of scope) | any value | Status string `entity type 'Url' not supported by Whisper enrichment`. |
+| `StixFile` (out of scope) | any value | Status string `entity type 'StixFile' not supported by Whisper enrichment`. |
+
+The three worked walk-throughs in [docs/scenarios/](./scenarios/) show the
+expected shape of the resulting STIX bundles in detail.
+
+## 3. Test case matrix
+
+Cover each row at least once per release candidate. The "Expected" column
+describes both the connector's status string (visible in the OpenCTI work
+item) and the user-visible state in the UI.
+
+| ID | Scenario | Steps | Expected |
+| --- | --- | --- | --- |
+| **TC-01** | Green-path IPv4 | Create `IPv4-Addr 8.8.8.8`, enrich | Status `Enriched 8.8.8.8 with N STIX objects (…ms)`. `Knowledge → Relationships` populated. |
+| **TC-02** | Green-path Domain | Create `Domain-Name dns.google`, enrich | Status `Enriched dns.google …`. |
+| **TC-03** | Green-path IPv6 | Create `IPv6-Addr 2001:4860:4860::8888`, enrich | Status `Enriched … with N STIX objects`. |
+| **TC-04** | Unsupported scope | Create `Url`, enrich | Connector is not offered in the Enrichment menu (OpenCTI filters by `CONNECTOR_SCOPE`). |
+| **TC-05** | Force unsupported via API | Trigger enrichment via OpenCTI GraphQL on a `Url` observable | Status `entity type 'Url' not supported by Whisper enrichment`. No bundle sent. |
+| **TC-06** | No Whisper data | Create `IPv4-Addr 192.0.2.1`, enrich | Status `No Whisper data for 192.0.2.1`. No new relationships in the UI. |
+| **TC-07** | Empty value | Create observable with missing `value` (edge case via API) | Status contains `no value to enrich`. |
+| **TC-08** | Bad API key | Set `WHISPER_API_KEY=invalid` in env, restart, enrich any seed | Work item marked **Failed**. Logs show `WhisperAuthError`. |
+| **TC-09** | Whisper unreachable | Block `graph.whisper.security` at the firewall, enrich any seed | Work item marked **Failed** after retries. Logs show `WhisperTransportError`. |
+| **TC-10** | Re-enrich idempotency | Run TC-01 twice in a row | Same `domain-name` / `ipv4-addr` SCO IDs both times. Existing entities are updated, not duplicated. |
+| **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. FEED_SOURCE / CITY / COUNTRY etc. neighbours are absent (parser-dropped). |
+| **TC-12** | Connector restart | `make dev-restart` mid-enrichment of a slow query | Connector re-registers cleanly; the in-flight work item is retried by OpenCTI. |
+
+## 4. Known limitations / non-goals for the MVP
+
+These are intentional gaps in this release - please don't file bugs against
+them. Future-iteration items, each tracked in a follow-up ticket as the
+roadmap firms up.
+
+1. **Threat properties on the seed are not lifted into STIX `indicator` SDOs.**
+   Whisper carries `threatScore`, `threatLevel`, `isMalware`, etc. on threat-listed
+   nodes; the parser ignores those today. See
+   [scenario 3](./scenarios/03-threat-intel-pivot.md).
+2. **Only one hop of traversal.** `LIMIT 50` neighbours of the seed.
+   Multi-hop chains (`(seed)-[*1..2]-(neighbour)`) are out of scope.
+3. **No SDO support beyond what the STIX mapper natively handles.** Whisper
+   doesn't expose threat-actor / malware / campaign labels, so the SDO mappers
+   in [stix_mapper.py](../src/connector/stix_mapper.py) (`threat-actor`,
+   `malware`) are not exercised today.
+4. **`Url` and `StixFile` are out of scope.** Whisper has no native label for
+   URLs or file hashes.
+5. **Email-addr is technically supported in the mapper but not in the query
+   templates.** The Whisper `EMAIL` label is rich but the v1 spec doesn't
+   include email enrichment.
+6. **8.8.4.4 and similar IPs are returned by Whisper with label `HOSTNAME`.**
+   That's a Whisper data-side quirk - the parser trusts labels, so those IPs
+   surface as `domain-name` SCOs with IP-shaped values. STIX accepts it but
+   downstream consumers may not. See
+   [scenario 1](./scenarios/01-domain-dns-pivot.md). Mitigation in a
+   follow-up: IP-format detection at parse time.
+7. **No 429 / quota-aware back-off.** The Whisper client retries 5xx and
+   connection errors but not 429. If Whisper rate-limits, the work item will
+   fail with `WhisperQueryError`.
+8. **Custom STIX relationship types are not emitted.** Specific Whisper edges
+   like `NAMESERVER_FOR`, `MAIL_FOR`, `LINKS_TO`, `BELONGS_TO`, etc., all
+   collapse into STIX `related-to`. The original edge semantics are lost. See
+   [scenario 2](./scenarios/02-ip-as-nameserver.md).
+9. **No automated integration test against the live Whisper API in CI.** All
+   71 unit tests mock the HTTP boundary. A QA-time smoke test against a real
+   key is currently the only end-to-end check.
+
+## 5. Bug severity guide
+
+When filing issues, use the `mvp` label and one of these severities. Open
+issues at <https://github.com/whisper-sec/whisper-opencti/issues>.
+
+| Severity | Definition | Example |
+| --- | --- | --- |
+| **S1 - critical** | Connector can't start, crashes on every enrichment, or corrupts data in OpenCTI. | Container crashloops on startup against valid config; every enrichment leaves the OpenCTI work item in a half-completed state. |
+| **S2 - major** | Green-path enrichment fails for a supported entity type, or produces clearly wrong STIX. | TC-01 fails. Bundle has `source_ref` pointing at a nonexistent object. `resolves-to` direction reversed. |
+| **S3 - minor** | A test case fails but a workaround exists; or behaviour is correct but logs are confusing. | TC-08 shows `WhisperAuthError` but the message is unclear. Connector logs at `info` are too chatty. |
+| **S4 - cosmetic** | Doc typos, UI label mismatch, log line formatting. | README link broken. |
+
+When filing, please include:
+
+- The seed value(s) used.
+- The connector's status string for the failing work item (visible in
+  **Data → Connectors → Whisper**).
+- A snippet of `make dev-logs --tail 100` from around the failing
+  enrichment.
+- For S1/S2: the OpenCTI version, the connector image SHA
+  (`docker inspect whisper-sec/whisper-opencti:dev | jq -r '.[0].Id'`), and
+  the Whisper API endpoint in use.
+
+## 6. Sign-off
+
+QA acceptance criteria for closing the milestone:
+
+- [ ] TC-01 through TC-12 all pass on a fresh `make dev-up`.
+- [ ] All three scenarios in [docs/scenarios/](./scenarios/) reproduce against
+  the live Whisper graph (results will differ from the captured examples;
+  shape and types should match).
+- [ ] No outstanding S1 or S2 bugs.
+- [ ] Open S3 / S4 bugs each have a follow-up ticket and an owner.
