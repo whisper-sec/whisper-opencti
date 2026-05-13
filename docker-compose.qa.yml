@@ -1,0 +1,30 @@
+# QA flavour: pulls the published connector image from GHCR instead of
+# building. Use this to validate a tagged release end-to-end before
+# handing the image off to QA.
+#
+# Compose this with docker-compose.base.yml — the Makefile's qa-* targets
+# pass both files.
+#
+# Override the image tag at runtime to validate a specific release:
+#
+#   WHISPER_CONNECTOR_IMAGE=ghcr.io/whisper-sec/whisper-opencti:v0.1.0 make qa-up
+#
+# Default tracks the most recent release candidate.
+
+services:
+  connector-whisper:
+    image: ${WHISPER_CONNECTOR_IMAGE:-ghcr.io/whisper-sec/whisper-opencti:v0.1.0-rc2}
+    restart: unless-stopped
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_ID}
+      - CONNECTOR_TYPE=INTERNAL_ENRICHMENT
+      - CONNECTOR_NAME=Whisper
+      - CONNECTOR_SCOPE=IPv4-Addr,IPv6-Addr,Domain-Name
+      - CONNECTOR_AUTO=false
+      - CONNECTOR_LOG_LEVEL=info
+      - WHISPER_API_URL=${WHISPER_API_URL}
+      - WHISPER_API_KEY=${WHISPER_API_KEY}
+    depends_on:
+      - opencti
