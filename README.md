@@ -54,21 +54,21 @@ connector wired together. Pinned to OpenCTI **6.4.5**.
 **Prerequisites:** Docker Desktop (or compatible engine) with at least **6 GB
 RAM** available, and `make`.
 
-### 1. Put your real Whisper API key in `.env`
+### 1. Create your `.env` from the template
 
 ```bash
 cp .env.example .env
 $EDITOR .env                          # set WHISPER_API_KEY=<your-real-key>
 ```
 
-[.env.example](./.env.example) is the committed template. The `.env` you
-create is gitignored. The Makefile layers `.env` on top of [.env.dev](./.env.dev)
-(committed defaults — dev OpenCTI creds, ports, OpenCTI version), so anything
-you set in `.env` overrides.
+[.env.example](./.env.example) is the **single source of truth** — committed,
+with working dev defaults for every variable. `.env` is gitignored. The
+Makefile reads `.env` only; without it the make targets exit with a hint.
 
-Skip this step and `make dev-up` still works — but every enrichment call will
-fail with `WhisperAuthError` because the connector will use
-`WHISPER_API_KEY=dev-placeholder-key` from `.env.dev`.
+The placeholder `WHISPER_API_KEY=dev-placeholder-key` in `.env.example` lets the
+connector start and register with OpenCTI even before you set a real key — but
+every enrichment call fails with `WhisperAuthError` until you replace it with a
+real Whisper Security key in your `.env`.
 
 ### 2. Bring up the stack
 
@@ -80,8 +80,9 @@ make dev-down      # stop containers (keeps data volumes)
 make dev-clean     # stop and wipe volumes for a fresh start
 ```
 
-OpenCTI is at <http://localhost:8080> (login from `.env.dev`:
-`admin@whisper.local` / `ChangeMe-dev-only`, **dev only — not for production**).
+OpenCTI is at <http://localhost:8080> (login from `.env`: `admin@whisper.local`
+/ `ChangeMe-dev-only` per the committed defaults — **dev only, not for
+production**).
 
 ### Validating a published image (QA / pre-release smoke test)
 
@@ -287,8 +288,7 @@ build on every PR to `main` and `develop`.
 ├── docker-compose.qa.yml   # QA flavour — connector pulled from GHCR
 ├── Makefile                # dev-up / qa-up / test / lint
 ├── config.yml.sample
-├── .env.example            # Template for local .env (gitignored)
-├── .env.dev                # Committed dev defaults
+├── .env.example            # Single source of truth; cp to .env (gitignored)
 ├── pyproject.toml
 └── requirements.txt
 ```
