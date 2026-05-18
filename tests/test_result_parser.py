@@ -158,3 +158,50 @@ def test_parse_threat_listed_ip_uses_value_property():
     ]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["properties"] == {"value": "1.1.1.1"}
+
+
+def test_parse_hostname_with_ipv4_value_reclassifies_as_ipv4():
+    # Whisper data quirk: some IPs (e.g. 8.8.4.4) are stored under the
+    # HOSTNAME label. The parser must reclassify by IP-format so OpenCTI
+    # doesn't reject the SCO as a malformed domain-name.
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "8.8.4.4"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["type"] == "ipv4-addr"
+    assert nodes[0]["properties"] == {"value": "8.8.4.4"}
+
+
+def test_parse_hostname_with_ipv6_value_reclassifies_as_ipv6():
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "2001:4860:4860::8888"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["type"] == "ipv6-addr"
+    assert nodes[0]["properties"] == {"value": "2001:4860:4860::8888"}
+
+
+def test_parse_hostname_with_real_domain_stays_as_domain_name():
+    # Regression check: only IP-shaped HOSTNAME values get reclassified;
+    # normal domain names continue to map to domain-name.
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["type"] == "domain-name"
+    assert nodes[0]["properties"] == {"value": "dns.google"}
+
+
+def test_parse_hostname_with_ipv4_reorients_resolves_to_correctly():
+    # After reclassification, a `dns.google -[RESOLVES_TO]- 8.8.4.4` edge
+    # should still come out as domain-name → ipv4-addr (not the other way).
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"},
+            "r": {"type": "RESOLVES_TO"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "8.8.4.4"},
+        }
+    ]
+    nodes, edges = parse_cypher_result(_result(rows))
+
+    types_by_id = {n["id"]: n["type"] for n in nodes}
+    assert types_by_id == {"1": "domain-name", "2": "ipv4-addr"}
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["type"] == "resolves-to"
+    assert types_by_id[edge["source_id"]] == "domain-name"
+    assert types_by_id[edge["target_id"]] == "ipv4-addr"
