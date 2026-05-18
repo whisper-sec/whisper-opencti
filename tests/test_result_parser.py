@@ -164,18 +164,14 @@ def test_parse_hostname_with_ipv4_value_reclassifies_as_ipv4():
     # Whisper data quirk: some IPs (e.g. 8.8.4.4) are stored under the
     # HOSTNAME label. The parser must reclassify by IP-format so OpenCTI
     # doesn't reject the SCO as a malformed domain-name.
-    rows = [
-        {"n": {"nodeId": "1", "label": "HOSTNAME", "name": "8.8.4.4"}}
-    ]
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "8.8.4.4"}}]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["type"] == "ipv4-addr"
     assert nodes[0]["properties"] == {"value": "8.8.4.4"}
 
 
 def test_parse_hostname_with_ipv6_value_reclassifies_as_ipv6():
-    rows = [
-        {"n": {"nodeId": "1", "label": "HOSTNAME", "name": "2001:4860:4860::8888"}}
-    ]
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "2001:4860:4860::8888"}}]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["type"] == "ipv6-addr"
     assert nodes[0]["properties"] == {"value": "2001:4860:4860::8888"}
@@ -184,9 +180,7 @@ def test_parse_hostname_with_ipv6_value_reclassifies_as_ipv6():
 def test_parse_hostname_with_real_domain_stays_as_domain_name():
     # Regression check: only IP-shaped HOSTNAME values get reclassified;
     # normal domain names continue to map to domain-name.
-    rows = [
-        {"n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"}}
-    ]
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"}}]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["type"] == "domain-name"
     assert nodes[0]["properties"] == {"value": "dns.google"}
