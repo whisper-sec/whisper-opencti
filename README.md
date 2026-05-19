@@ -274,6 +274,7 @@ build on every PR to `main` and `develop`.
 .
 ├── .github/workflows/      # CI (lint, tests, docker build)
 ├── docs/
+│   ├── architecture.md     # System design + per-module deep dive
 │   ├── scenarios/          # Worked enrichment walk-throughs
 │   └── qa-handoff.md       # QA test matrix + known limitations
 ├── src/connector/
@@ -298,6 +299,8 @@ build on every PR to `main` and `develop`.
 
 ## Further reading
 
+- [docs/architecture.md](./docs/architecture.md) — system design and per-module
+  deep dive for engineers onboarding to the codebase.
 - [docs/scenarios/](./docs/scenarios/) — three worked enrichment scenarios with
   real Whisper data and the resulting STIX shapes.
 - [docs/qa-handoff.md](./docs/qa-handoff.md) — QA test matrix, known
