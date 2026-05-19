@@ -100,11 +100,14 @@ make qa-logs                                                      # tail
 make qa-down                                                      # stop (keeps volumes)
 ```
 
-Default tag is `ghcr.io/whisper-sec/whisper-opencti:v0.1.0-rc2`.
-Override to validate a different release:
+The connector version pulled by the QA stack is controlled by
+`WHISPER_CONNECTOR_VERSION` in [.env.example](./.env.example) - currently
+`v0.1.0`. To validate a release candidate without committing a bump,
+edit the value in your local `.env`:
 
 ```bash
-WHISPER_CONNECTOR_IMAGE=ghcr.io/whisper-sec/whisper-opencti:v0.1.0 make qa-up
+$EDITOR .env       # change WHISPER_CONNECTOR_VERSION to v0.2.0-rc1
+make qa-up
 ```
 
 The QA stack uses Compose project name `whisper-opencti-qa`, isolating its
