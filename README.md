@@ -54,6 +54,24 @@ connector wired together. Pinned to OpenCTI **6.4.5**.
 **Prerequisites:** Docker Desktop (or compatible engine) with at least **6 GB
 RAM** available, and `make`.
 
+### 1. Create your `.env` from the template
+
+```bash
+cp .env.example .env
+$EDITOR .env                          # set WHISPER_API_KEY=<your-real-key>
+```
+
+[.env.example](./.env.example) is the **single source of truth** — committed,
+with working dev defaults for every variable. `.env` is gitignored. The
+Makefile reads `.env` only; without it the make targets exit with a hint.
+
+The placeholder `WHISPER_API_KEY=dev-placeholder-key` in `.env.example` lets the
+connector start and register with OpenCTI even before you set a real key — but
+every enrichment call fails with `WhisperAuthError` until you replace it with a
+real Whisper Security key in your `.env`.
+
+### 2. Bring up the stack
+
 ```bash
 make dev-up        # build + start everything (~2-3 min on first run)
 make dev-status    # check service state
@@ -62,14 +80,37 @@ make dev-down      # stop containers (keeps data volumes)
 make dev-clean     # stop and wipe volumes for a fresh start
 ```
 
-The stack uses values from [.env.dev](./.env.dev) — these are committed dev
-defaults, **not for production use**. OpenCTI is at
-<http://localhost:8080> (login: `admin@whisper.local` / `ChangeMe-dev-only`).
+OpenCTI is at <http://localhost:8080> (login from `.env`: `admin@whisper.local`
+/ `ChangeMe-dev-only` per the committed defaults — **dev only, not for
+production**).
 
-Before triggering enrichment, replace `WHISPER_API_KEY=dev-placeholder-key` in
-[.env.dev](./.env.dev) with a real key and `make dev-restart`. Without a real
-key the connector starts and registers but every enrichment fails with a
-`WhisperAuthError`.
+### Validating a published image (QA / pre-release smoke test)
+
+Same full OpenCTI stack, but the connector container runs the published
+GHCR image instead of being built from source. Use this to validate a
+tagged release end-to-end before handing the image off to QA.
+
+Uses the **same `.env` you created above** — `WHISPER_API_KEY` and any other
+overrides apply to both stacks.
+
+```bash
+docker login ghcr.io                                              # PAT with read:packages
+make qa-up                                                        # pulls + starts the stack
+make qa-logs                                                      # tail
+make qa-down                                                      # stop (keeps volumes)
+```
+
+Default tag is `ghcr.io/whisper-sec/whisper-opencti:v0.1.0-rc2`.
+Override to validate a different release:
+
+```bash
+WHISPER_CONNECTOR_IMAGE=ghcr.io/whisper-sec/whisper-opencti:v0.1.0 make qa-up
+```
+
+The QA stack uses Compose project name `whisper-opencti-qa`, isolating its
+volumes from `whisper-opencti-dev`. The two stacks **cannot run
+simultaneously** — both bind `OPENCTI_PORT`. Stop one before bringing up
+the other.
 
 ### Verifying the connector registered
 
@@ -242,11 +283,12 @@ build on every PR to `main` and `develop`.
 ├── tests/                  # pytest, 71 cases
 ├── Dockerfile
 ├── docker-compose.yml      # Connector-only snippet for existing OpenCTI deployments
-├── docker-compose.dev.yml  # Full local stack (OpenCTI + deps + connector)
-├── Makefile                # dev-up / dev-down / test / lint
+├── docker-compose.base.yml # Shared OpenCTI stack (used by dev + qa flavours)
+├── docker-compose.dev.yml  # Dev flavour — connector built from source
+├── docker-compose.qa.yml   # QA flavour — connector pulled from GHCR
+├── Makefile                # dev-up / qa-up / test / lint
 ├── config.yml.sample
-├── .env.sample             # Env vars for production
-├── .env.dev                # Committed dev defaults
+├── .env.example            # Single source of truth; cp to .env (gitignored)
 ├── pyproject.toml
 └── requirements.txt
 ```
