@@ -1,6 +1,6 @@
 # Architecture
 
-Technical description of how `whisper-opencti` is structured and why. Intended audience: a new engineer onboarding to the codebase, or a reviewer auditing a non-trivial change. For "how do I run this" see [README.md](README.md); for QA-facing test matrix see [docs/qa-handoff.md](docs/qa-handoff.md).
+Technical description of how `whisper-opencti` is structured and why. Intended audience: a new engineer onboarding to the codebase, or a reviewer auditing a non-trivial change. For "how do I run this" see [README.md](../README.md); for QA-facing test matrix see [docs/qa-handoff.md](qa-handoff.md).
 
 ## 1. System context
 
@@ -29,7 +29,7 @@ Technical description of how `whisper-opencti` is structured and why. Intended a
 
 The connector never talks to the OpenCTI database directly. All reads (`stix_cyber_observable.read`) and writes (`send_stix2_bundle`) go through `pycti.OpenCTIConnectorHelper`, which speaks GraphQL and RabbitMQ on our behalf.
 
-**Trust boundaries.** Two external systems: OpenCTI (trusted, internal) and the Whisper graph API (trusted, but a separate service with its own SLA, auth, and rate limits). Every error class in [src/connector/exceptions.py](src/connector/exceptions.py) corresponds to a failure mode at the Whisper boundary.
+**Trust boundaries.** Two external systems: OpenCTI (trusted, internal) and the Whisper graph API (trusted, but a separate service with its own SLA, auth, and rate limits). Every error class in [src/connector/exceptions.py](../src/connector/exceptions.py) corresponds to a failure mode at the Whisper boundary.
 
 ## 2. Process model
 
@@ -50,13 +50,13 @@ Throughput is bounded by sequential per-message processing. For the MVP this is 
 
 ## 3. Module-by-module
 
-The code is intentionally small and shallow. Five modules in [src/connector/](src/connector/) plus an entry point.
+The code is intentionally small and shallow. Five modules in [src/connector/](../src/connector/) plus an entry point.
 
-### 3.1 [src/main.py](src/main.py) - entry point
+### 3.1 [src/main.py](../src/main.py) - entry point
 
 Thirty lines. Instantiates `WhisperConnector` and calls `.start()`. The `entrypoint.sh` shim execs `python -m src.main` so signals propagate cleanly under `docker stop`.
 
-### 3.2 [connector.py](src/connector/connector.py) - orchestration
+### 3.2 [connector.py](../src/connector/connector.py) - orchestration
 
 `WhisperConnector` is the only class with side effects. Two responsibilities:
 
@@ -65,7 +65,7 @@ Thirty lines. Instantiates `WhisperConnector` and calls `.start()`. The `entrypo
 
 Exceptions from the Whisper client and STIX mapper propagate up and are caught by `pycti` - that's intentional: a raised exception marks the OpenCTI work item as **failed**, while a string return marks it **succeeded with a message**. The distinction matters for the QA pass.
 
-### 3.3 [queries.py](src/connector/queries.py) - Cypher templates
+### 3.3 [queries.py](../src/connector/queries.py) - Cypher templates
 
 A small static table mapping OpenCTI entity types to one-hop Cypher templates:
 
@@ -83,7 +83,7 @@ Edges use the undirected form `-[r]-`. Direction is reconstructed downstream (se
 
 Unsupported entity types (`Url`, `StixFile`, `Email-Addr`) deliberately do not have entries. `get_query_for_entity_type` returns `None`, and the connector emits a non-error status string. The mapper in §3.6 has the code paths but no query templates feed them - adding support is a two-place change (template + label mapping).
 
-### 3.4 [whisper_client.py](src/connector/whisper_client.py) - HTTP client
+### 3.4 [whisper_client.py](../src/connector/whisper_client.py) - HTTP client
 
 `WhisperClient.execute_cypher` is the only function in the codebase that performs network I/O against Whisper.
 
@@ -99,7 +99,7 @@ Unsupported entity types (`Url`, `StixFile`, `Email-Addr`) deliberately do not h
 
 **Known gap:** no 429-aware backoff. If Whisper rate-limits, the call surfaces as `WhisperQueryError` and the work item fails. Tracked as a follow-up.
 
-### 3.5 [result_parser.py](src/connector/result_parser.py) - Whisper rows → normalized graph
+### 3.5 [result_parser.py](../src/connector/result_parser.py) - Whisper rows → normalized graph
 
 This is the trickiest module. Whisper returns row cells in two shapes:
 
@@ -123,7 +123,7 @@ Two translation tables encode the schema mapping:
 
 Output is `(nodes, edges)` where each is a list of normalized dicts - the public contract with §3.6.
 
-### 3.6 [stix_mapper.py](src/connector/stix_mapper.py) - normalized → STIX 2.1
+### 3.6 [stix_mapper.py](../src/connector/stix_mapper.py) - normalized → STIX 2.1
 
 Pure functions. No I/O, no logging beyond errors. `build_bundle(nodes, edges) -> stix2.Bundle` is the public entry point.
 
@@ -138,7 +138,7 @@ Together these ensure that running the same enrichment twice produces a bundle w
 
 `NODE_MAPPERS` is a static dispatch table; `ALLOWED_RELATIONSHIPS` is an allowlist. Unmapped types raise `StixMappingError` rather than producing malformed STIX - fail loudly at the boundary.
 
-### 3.7 [exceptions.py](src/connector/exceptions.py) - error taxonomy
+### 3.7 [exceptions.py](../src/connector/exceptions.py) - error taxonomy
 
 Five exception classes, deliberate hierarchy:
 
@@ -181,8 +181,8 @@ Concrete trace for `IPv4-Addr 8.8.8.8`:
 
 Two layers, env vars override YAML:
 
-- **Env vars** - primary. [.env.example](.env.example) is the committed single-source-of-truth template (working dev defaults + production guidance in comments). `cp .env.example .env` then edit; the Makefile reads `.env` only.
-- **`config.yml`** - optional, loaded from the repo root if present. See [config.yml.sample](config.yml.sample). Shape mirrors the env-var structure under `opencti:` / `connector:` / `whisper:` keys.
+- **Env vars** - primary. [.env.example](../.env.example) is the committed single-source-of-truth template (working dev defaults + production guidance in comments). `cp .env.example .env` then edit; the Makefile reads `.env` only.
+- **`config.yml`** - optional, loaded from the repo root if present. See [config.yml.sample](../config.yml.sample). Shape mirrors the env-var structure under `opencti:` / `connector:` / `whisper:` keys.
 
 Resolution happens in `WhisperConnector.__init__` via `pycti.get_config_variable(env_name, yaml_path, config)`. Tests bypass this entirely by injecting `helper` and `client` directly.
 
@@ -190,24 +190,24 @@ Resolution happens in `WhisperConnector.__init__` via `pycti.get_config_variable
 
 Two compose files with deliberately different scopes:
 
-- **[docker-compose.dev.yml](docker-compose.dev.yml)** - full local stack: stock `opencti/platform`, `opencti/worker`, plus `redis`, `elasticsearch`, `minio`, `rabbitmq`, and the connector. Used by `make dev-up`. **Self-contained reproducible environment**, which is what AC #4 (QA hand-off) hinges on.
-- **[docker-compose.yml](docker-compose.yml)** - connector-only snippet meant to be pasted into an existing OpenCTI compose. Eight env vars, no dependencies of its own. This is what an OpenCTI admin installs in production.
+- **[docker-compose.dev.yml](../docker-compose.dev.yml)** - full local stack: stock `opencti/platform`, `opencti/worker`, plus `redis`, `elasticsearch`, `minio`, `rabbitmq`, and the connector. Used by `make dev-up`. **Self-contained reproducible environment**, which is what AC #4 (QA hand-off) hinges on.
+- **[docker-compose.yml](../docker-compose.yml)** - connector-only snippet meant to be pasted into an existing OpenCTI compose. Eight env vars, no dependencies of its own. This is what an OpenCTI admin installs in production.
 
 The `Dockerfile` is a single-stage `python:3.11-slim` build. The only non-pip dependency is `libmagic1` (transitively required by `pycti` via `python-magic`).
 
 ## 7. Testing strategy
 
-Five test files in [tests/](tests/), 76 cases total, all unit tests. No live network calls.
+Five test files in [tests/](../tests/), 76 cases total, all unit tests. No live network calls.
 
 | File | Covers | Technique |
 |---|---|---|
-| [test_queries.py](tests/test_queries.py) | Template substitution, escaping, unsupported-type fallthrough | Pure function calls |
-| [test_whisper_client.py](tests/test_whisper_client.py) | HTTP boundary: auth errors, retries, transport errors, JSON parsing | `responses` library mocks |
-| [test_result_parser.py](tests/test_result_parser.py) | Cypher row → normalized graph, including direction orientation and dropped-label behavior | Hand-built `CypherResult` fixtures |
-| [test_stix_mapper.py](tests/test_stix_mapper.py) | Node/edge mapping, idempotency (same input → same IDs), error paths | Construct normalized dicts, assert STIX shape |
-| [test_connector.py](tests/test_connector.py) | End-to-end callback with helper + client mocked | Injects fake `OpenCTIConnectorHelper` and `WhisperClient` |
+| [test_queries.py](../tests/test_queries.py) | Template substitution, escaping, unsupported-type fallthrough | Pure function calls |
+| [test_whisper_client.py](../tests/test_whisper_client.py) | HTTP boundary: auth errors, retries, transport errors, JSON parsing | `responses` library mocks |
+| [test_result_parser.py](../tests/test_result_parser.py) | Cypher row → normalized graph, including direction orientation and dropped-label behavior | Hand-built `CypherResult` fixtures |
+| [test_stix_mapper.py](../tests/test_stix_mapper.py) | Node/edge mapping, idempotency (same input → same IDs), error paths | Construct normalized dicts, assert STIX shape |
+| [test_connector.py](../tests/test_connector.py) | End-to-end callback with helper + client mocked | Injects fake `OpenCTIConnectorHelper` and `WhisperClient` |
 
-**Deliberate gap:** no integration test against the live Whisper API in CI. The dev stack + QA manual matrix in [docs/qa-handoff.md](docs/qa-handoff.md) is the only true end-to-end check today.
+**Deliberate gap:** no integration test against the live Whisper API in CI. The dev stack + QA manual matrix in [docs/qa-handoff.md](qa-handoff.md) is the only true end-to-end check today.
 
 ## 8. Known scope boundaries
 
@@ -221,4 +221,4 @@ These are not bugs - they're MVP design decisions, documented at the spec level.
 6. **No 429-aware backoff.** Whisper rate-limit responses fail the work item.
 7. **IPs returned with `HOSTNAME` label** (Whisper data quirk for some IPs like `8.8.4.4`) surface as `domain-name` SCOs with IP-shaped values. STIX accepts it; downstream consumers may not. Mitigation would be IP-format detection inside `_translate_node`.
 
-Each of these has a corresponding entry in [docs/qa-handoff.md §4](docs/qa-handoff.md).
+Each of these has a corresponding entry in [docs/qa-handoff.md §4](qa-handoff.md).
