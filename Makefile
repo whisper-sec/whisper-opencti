@@ -44,7 +44,7 @@ dev-clean: ## Stop the dev stack AND remove volumes (fresh state)
 qa-up: _check-env ## Bring up the QA stack (validates the published GHCR image end-to-end)
 	$(COMPOSE_QA) up -d
 	@echo ""
-	@echo "QA stack: connector image = $${WHISPER_CONNECTOR_IMAGE:-ghcr.io/whisper-sec/whisper-opencti:v0.1.0-rc2}"
+	@echo "QA stack: connector version = $$(grep '^WHISPER_CONNECTOR_VERSION=' .env | cut -d= -f2)"
 	@echo "OpenCTI will be available at $$(grep OPENCTI_BASE_URL .env | cut -d= -f2)"
 	@echo "Login: $$(grep OPENCTI_ADMIN_EMAIL .env | cut -d= -f2) / $$(grep OPENCTI_ADMIN_PASSWORD .env | cut -d= -f2)"
 	@echo "Note: cannot run alongside dev stack - both bind the same OPENCTI_PORT. Run \`make dev-down\` first if needed."
