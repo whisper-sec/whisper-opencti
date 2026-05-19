@@ -16,6 +16,7 @@ PREFIX, REGISTERED_PREFIX, ANNOUNCED_PREFIX, ORGANIZATION, RIR, TLD, etc.)
 are silently dropped. Edges that touch a dropped node are also dropped.
 """
 
+import ipaddress
 import logging
 import re
 
@@ -94,10 +95,21 @@ def parse_cypher_result(result: CypherResult) -> tuple[list[dict], list[dict]]:
 
 def _translate_node(cell: dict) -> dict | None:
     label = cell.get("label")
+    name = cell.get("name")
+
+    # Whisper data quirk: some IPs (e.g. 8.8.4.4) are stored with label
+    # HOSTNAME. Reclassify by IP-format so OpenCTI doesn't reject them
+    # as malformed domain-name SCOs.
+    if label == "HOSTNAME" and name:
+        try:
+            ip = ipaddress.ip_address(name)
+            label = "IPV6" if isinstance(ip, ipaddress.IPv6Address) else "IPV4"
+        except ValueError:
+            pass
+
     stix_type = _LABEL_TO_STIX_TYPE.get(label)
     if stix_type is None:
         return None
-    name = cell.get("name")
     if not name:
         return None
 
