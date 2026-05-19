@@ -164,8 +164,14 @@ defaults for everything except `WHISPER_API_KEY`. The `.env` you create is
 gitignored.
 
 The image version is controlled by `WHISPER_CONNECTOR_VERSION` in `.env`
-(defaults to the current stable release). To validate a release candidate,
-change it to e.g. `v0.2.0-rc1` and re-run `make qa-up`.
+(defaults to the current stable release). To validate a different release,
+check the **[releases page](https://github.com/whisper-sec/whisper-opencti/releases)**
+for available tags and pick one:
+
+- The entry tagged **Latest** is the current stable release (e.g. `v0.1.0`).
+- Entries tagged **Pre-release** are release candidates (e.g. `v0.2.0-rc1`).
+
+Edit `WHISPER_CONNECTOR_VERSION` to that tag, then re-run `make qa-up`.
 
 ### 4. Bring up the QA stack
 
@@ -249,12 +255,13 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u <your-github-username> --password-s
 docker pull ghcr.io/whisper-sec/whisper-opencti:v0.1.0
 ```
 
-Available tags:
+Available tags (see the [releases page](https://github.com/whisper-sec/whisper-opencti/releases) for the full list):
 
 | Tag | Use when |
 | --- | --- |
-| `vMAJOR.MINOR.PATCH` (e.g. `v0.1.0`) | Production - pin to a specific release. |
-| `latest` | Most recent published release. Only if you accept automatic updates on `docker pull`. |
+| `vMAJOR.MINOR.PATCH` (e.g. `v0.1.0`) | Production - pin to a specific release. The entry tagged **Latest** on the releases page. |
+| `vMAJOR.MINOR.PATCH-rcN` | Pre-release / release candidate. Entries tagged **Pre-release**. |
+| `latest` | Whatever was most recently tagged as a stable release. Only if you accept automatic updates on `docker pull`. |
 
 To confirm what's running:
 
