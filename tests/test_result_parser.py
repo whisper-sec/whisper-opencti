@@ -102,6 +102,9 @@ def test_parse_unknown_edge_type_falls_back_to_related_to():
     ]
     _nodes, edges = parse_cypher_result(_result(rows))
     assert edges[0]["type"] == "related-to"
+    # Even unknown / future Whisper edge types get their name preserved in
+    # the description — analysts can grep / filter on this.
+    assert edges[0]["properties"]["description"] == "SOME_UNKNOWN_EDGE"
 
 
 def test_parse_asn_parses_number_from_name():
@@ -205,3 +208,62 @@ def test_parse_hostname_with_ipv4_reorients_resolves_to_correctly():
     assert edge["type"] == "resolves-to"
     assert types_by_id[edge["source_id"]] == "domain-name"
     assert types_by_id[edge["target_id"]] == "ipv4-addr"
+
+
+def test_parse_nameserver_for_edge_falls_back_with_description():
+    # Whisper's NAMESERVER_FOR has no STIX 2.1 SRO equivalent and OpenCTI
+    # rejects custom relationship_type values. We collapse to "related-to"
+    # but carry the original Whisper edge type in the description so the
+    # semantic isn't lost.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"},
+            "r": {"type": "NAMESERVER_FOR"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "served.example.com"},
+        }
+    ]
+    _nodes, edges = parse_cypher_result(_result(rows))
+    assert len(edges) == 1
+    assert edges[0]["type"] == "related-to"
+    assert edges[0]["properties"]["description"] == "NAMESERVER_FOR"
+
+
+def test_parse_mail_for_edge_falls_back_with_description():
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "mx.example.com"},
+            "r": {"type": "MAIL_FOR"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "example.com"},
+        }
+    ]
+    _nodes, edges = parse_cypher_result(_result(rows))
+    assert edges[0]["type"] == "related-to"
+    assert edges[0]["properties"]["description"] == "MAIL_FOR"
+
+
+def test_parse_links_to_edge_falls_back_with_description():
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "source.example"},
+            "r": {"type": "LINKS_TO"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "target.example"},
+        }
+    ]
+    _nodes, edges = parse_cypher_result(_result(rows))
+    assert edges[0]["type"] == "related-to"
+    assert edges[0]["properties"]["description"] == "LINKS_TO"
+
+
+def test_parse_resolves_to_keeps_dedicated_type_with_no_description():
+    # RESOLVES_TO maps directly to STIX `resolves-to`, so no description
+    # enrichment is added.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"},
+            "r": {"type": "RESOLVES_TO"},
+            "m": {"nodeId": "2", "label": "IPV4", "name": "8.8.8.8"},
+        }
+    ]
+    _nodes, edges = parse_cypher_result(_result(rows))
+    assert edges[0]["type"] == "resolves-to"
+    assert "description" not in edges[0]["properties"]
