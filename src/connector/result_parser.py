@@ -35,7 +35,15 @@ _LABEL_TO_STIX_TYPE: dict[str, str] = {
 }
 
 # Whisper edge type → STIX relationship type. Anything not listed here
-# falls back to "related-to".
+# falls back to "related-to" with the original Whisper edge type carried in
+# the relationship's `description` field - see _build_edge below.
+#
+# OpenCTI enforces the STIX 2.1 fixed SRO vocabulary at ingestion (custom
+# relationship_type strings like "nameserver-for" are rejected with
+# FUNCTIONAL_ERROR). Issue #31 explored emitting custom types directly;
+# that path requires platform-side custom-relationship-type registration
+# (deferred to v0.4). For now we preserve Whisper edge semantics in the
+# description field - visible to analysts, queryable as text, lossless.
 _EDGE_TO_STIX_REL: dict[str, str] = {
     "RESOLVES_TO": "resolves-to",
 }
@@ -79,14 +87,22 @@ def parse_cypher_result(result: CypherResult) -> tuple[list[dict], list[dict]]:
             tgt = _nearest_node(translated_by_idx, idx, direction=+1)
             if src is None or tgt is None:
                 continue
-            stix_rel = _EDGE_TO_STIX_REL.get(edge_cell["type"], "related-to")
+            whisper_type = edge_cell["type"]
+            stix_rel = _EDGE_TO_STIX_REL.get(whisper_type, "related-to")
             oriented_src, oriented_tgt = _orient_edge(stix_rel, src, tgt)
+            properties: dict = {}
+            # When the Whisper edge has no dedicated STIX type, surface the
+            # original Whisper edge name in the description so analysts can
+            # still distinguish NAMESERVER_FOR from LINKS_TO etc. without
+            # losing the semantics in the `related-to` collapse.
+            if stix_rel == "related-to":
+                properties["description"] = whisper_type
             edges.append(
                 {
                     "source_id": oriented_src["id"],
                     "target_id": oriented_tgt["id"],
                     "type": stix_rel,
-                    "properties": {},
+                    "properties": properties,
                 }
             )
 
