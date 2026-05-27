@@ -90,6 +90,23 @@ class WhisperConnector:
             )
             return f"No Whisper data for {entity_value}"
 
+        # If every neighbour was dropped by the parser (unmappable labels like
+        # PREFIX, CITY, COUNTRY, FEED_SOURCE) we end up with just the seed and
+        # no edges. Sending a bundle that re-asserts the seed observable adds
+        # no new information to OpenCTI and produces a misleading "Enriched"
+        # status. Tell the analyst the truth - Whisper had no mappable
+        # relationships for this observable.
+        if not edges:
+            self.helper.connector_logger.info(
+                "No mappable Whisper relationships for entity",
+                {
+                    "entity_id": observable.get("id"),
+                    "value": entity_value,
+                    "nodes_returned": len(nodes),
+                },
+            )
+            return f"No mappable Whisper relationships for {entity_value}"
+
         try:
             bundle = build_bundle(nodes, edges)
         except StixMappingError as exc:
