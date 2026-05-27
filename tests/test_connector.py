@@ -129,7 +129,13 @@ def test_process_message_inlines_value_and_limit_into_query(connector, helper, c
     assert len(args) == 1
 
 
-def test_process_message_drops_unmappable_neighbor_but_still_sends_seed(connector, helper, client):
+def test_process_message_returns_no_mappable_rels_when_only_seed_remains(connector, helper, client):
+    # Issue #44: when the parser drops every neighbour (unmappable labels
+    # like CITY / PREFIX / COUNTRY / FEED_SOURCE) and leaves only the seed
+    # observable plus no edges, the connector must NOT report success.
+    # Sending a bundle with just the seed adds no new info to OpenCTI and
+    # produces a misleading green status. The correct outcome is a clear
+    # "No mappable Whisper relationships for X" status with no bundle sent.
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
@@ -148,10 +154,9 @@ def test_process_message_drops_unmappable_neighbor_but_still_sends_seed(connecto
     )
 
     result = connector._process_message({"entity_id": "ipv4--x"})
-    assert "Enriched 8.8.8.8" in result
-    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
-    types = [o["type"] for o in bundle["objects"]]
-    assert types == ["ipv4-addr"]
+
+    assert result == "No mappable Whisper relationships for 8.8.8.8"
+    helper.send_stix2_bundle.assert_not_called()
 
 
 def test_process_message_whisper_transport_error_propagates_and_logs(connector, helper, client):
