@@ -48,6 +48,8 @@ that the expected outcomes shouldn't shift wildly week-to-week.
 | `Domain-Name` | `dns.google` | DNS + NAMESERVER_FOR pivot ([scenario 1](./scenarios/01-domain-dns-pivot.md)). |
 | `Domain-Name` | `malware-traffic-analysis.net` | LINKS_TO pivot, FEED_SOURCE neighbours dropped silently ([scenario 3](./scenarios/03-threat-intel-pivot.md)). |
 | `Domain-Name` | `this-should-never-exist-12345.invalid` | No Whisper data. |
+| `Autonomous-System` | `AS15169` (Google) | At least one related entity. |
+| `Autonomous-System` | `AS13335` (Cloudflare) | At least one related entity. |
 | `Url` (out of scope) | any value | Status string `entity type 'Url' not supported by Whisper enrichment`. |
 | `StixFile` (out of scope) | any value | Status string `entity type 'StixFile' not supported by Whisper enrichment`. |
 
@@ -74,6 +76,7 @@ item) and the user-visible state in the UI.
 | **TC-10** | Re-enrich idempotency | Run TC-01 twice in a row | Same `domain-name` / `ipv4-addr` SCO IDs both times. Existing entities are updated, not duplicated. |
 | **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. FEED_SOURCE / CITY / COUNTRY etc. neighbours are absent (parser-dropped). |
 | **TC-12** | Connector restart | `make dev-restart` mid-enrichment of a slow query | Connector re-registers cleanly; the in-flight work item is retried by OpenCTI. |
+| **TC-13** | Green-path AS | Create `Autonomous-System AS15169`, enrich | Status `Enriched AS15169 with N STIX objects (…ms)`. `Knowledge → Relationships` populated. |
 
 ## 4. Known limitations / non-goals for the MVP
 
@@ -87,10 +90,14 @@ roadmap firms up.
    [scenario 3](./scenarios/03-threat-intel-pivot.md).
 2. **Only one hop of traversal.** `LIMIT 50` neighbours of the seed.
    Multi-hop chains (`(seed)-[*1..2]-(neighbour)`) are out of scope.
-3. **No SDO support beyond what the STIX mapper natively handles.** Whisper
-   doesn't expose threat-actor / malware / campaign labels, so the SDO mappers
-   in [stix_mapper.py](../src/connector/stix_mapper.py) (`threat-actor`,
-   `malware`) are not exercised today.
+3. **SDO support is partial.** The STIX mapper natively supports
+   `threat-actor`, `malware`, `location` (Country / City), and `identity`
+   (Organization / Registrar) SDOs. Whisper labels that don't yet map to
+   any STIX type (`FEED_SOURCE`, `PREFIX`, `REGISTERED_PREFIX`,
+   `ANNOUNCED_PREFIX`, `RIR`, `TLD`, `PHONE`, etc.) are silently dropped.
+   Surfacing those — particularly `ANNOUNCED_PREFIX` (for routed prefixes
+   on ASN enrichments) and `FEED_SOURCE` (for threat-feed visibility) —
+   is follow-up scope under #48's broader enrichment-output work.
 4. **`Url` and `StixFile` are out of scope.** Whisper has no native label for
    URLs or file hashes.
 5. **Email-addr is technically supported in the mapper but not in the query
