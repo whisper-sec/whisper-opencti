@@ -119,6 +119,72 @@ def test_map_malware_deterministic_id_and_is_family():
     assert obj.id == map_node(node).id
 
 
+def test_map_location_deterministic_id_and_country():
+    # Issue #48 follow-up: Whisper COUNTRY nodes → STIX Location SDOs
+    # with the ISO 3166-1 alpha-2 code in the `country` field. UUIDv5 ID
+    # keyed off the Whisper node ID so re-enrichment is idempotent.
+    node = {
+        "id": "w-country-us-1",
+        "type": "location",
+        "properties": {"country": "US"},
+    }
+    obj_a = map_node(node)
+    obj_b = map_node(node)
+    assert isinstance(obj_a, stix2.Location)
+    assert obj_a.id.startswith("location--")
+    assert obj_a.id == obj_b.id  # idempotent
+    assert obj_a.country == "US"
+
+
+def test_map_location_with_city_country_and_name():
+    # Whisper CITY nodes give us city + country code; the Location SDO
+    # carries both plus the original full string as the human-readable
+    # name.
+    node = {
+        "id": "w-city-1",
+        "type": "location",
+        "properties": {
+            "city": "Mountain View",
+            "country": "US",
+            "name": "Mountain View, US",
+        },
+    }
+    obj = map_node(node)
+    assert isinstance(obj, stix2.Location)
+    assert obj.city == "Mountain View"
+    assert obj.country == "US"
+    assert obj.name == "Mountain View, US"
+
+
+def test_map_location_without_country_or_region_raises():
+    # STIX 2.1 Location requires at least one of country/region/lat-long.
+    # The parser drops Location nodes that lack a country, but the mapper
+    # is defensive and raises StixMappingError if it ever sees one anyway.
+    node = {
+        "id": "w-bad-loc",
+        "type": "location",
+        "properties": {"name": "Just A Name Without Country"},
+    }
+    with pytest.raises(StixMappingError):
+        map_node(node)
+
+
+def test_map_identity_deterministic_id_and_class():
+    # Whisper ORGANIZATION / REGISTRAR nodes → STIX Identity SDOs.
+    node = {
+        "id": "w-org-1",
+        "type": "identity",
+        "properties": {"name": "Google LLC", "identity_class": "organization"},
+    }
+    obj_a = map_node(node)
+    obj_b = map_node(node)
+    assert isinstance(obj_a, stix2.Identity)
+    assert obj_a.id.startswith("identity--")
+    assert obj_a.id == obj_b.id  # idempotent
+    assert obj_a.name == "Google LLC"
+    assert obj_a.identity_class == "organization"
+
+
 # --- Validation -------------------------------------------------------------
 
 
@@ -252,5 +318,7 @@ def test_every_node_type_has_a_mapper_smoke():
         "file",
         "threat-actor",
         "malware",
+        "location",
+        "identity",
     }
     assert set(NODE_MAPPERS.keys()) == expected_types

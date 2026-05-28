@@ -92,19 +92,67 @@ bundle.
 }
 ```
 
+## Supplementary network context (issue #48 Phase C)
+
+For every `IPv4-Addr` / `IPv6-Addr` seed the connector also issues a
+**2-hop network-context query** that walks
+`(ip)-[:ANNOUNCED_BY]->(:ANNOUNCED_PREFIX)-[:ROUTES]->(:ASN)`,
+plus optional `HAS_NAME` (for the ASN's human label) and `BELONGS_TO`
+(static prefix). The result is folded into:
+
+- a real `Autonomous-System` SCO in the bundle (clickable in OpenCTI,
+  deduped by UUIDv5 keyed off the Whisper ASN nodeId);
+- a `related-to` relationship `IP → AS` tagged
+  `description="ANNOUNCED_BY"` so analysts can distinguish the announcing
+  AS from any other ASN they later add by hand;
+- a `Whisper network context` Note attached to the seed with the
+  announced prefix, BGP flags (`anycast`, `MOAS`, `withdrawn`), the
+  `ANNOUNCED_PREFIX`-level threat level + score, and the static
+  allocation prefix if different from the announced one.
+
+So a fresh enrichment of `1.1.1.1` produces, on top of the eight
+`NAMESERVER_FOR` rows above:
+
+```json
+{
+  "type": "autonomous-system", "id": "autonomous-system--<uuid>",
+  "number": 13335, "name": "CLOUDFLARENET, US"
+},
+{
+  "type": "relationship", "relationship_type": "related-to",
+  "description": "ANNOUNCED_BY",
+  "source_ref": "ipv4-addr--<uuid-of-1.1.1.1>",
+  "target_ref": "autonomous-system--<uuid>"
+},
+{
+  "type": "note", "abstract": "Whisper network context",
+  "content": "Announced by: AS13335 (CLOUDFLARENET, US)\nAnnounced prefix: 1.1.1.0/24\nBGP flags: anycast\nANNOUNCED_PREFIX threat: LOW (score 1.0)",
+  "object_refs": ["ipv4-addr--<uuid-of-1.1.1.1>"]
+}
+```
+
+If Whisper has threat-feed listings or non-zero `threatScore` on the IP
+itself, a second `Whisper threat intelligence` Note ships alongside (see
+[scenario 3](./03-threat-intel-pivot.md) for that shape).
+
 ## What you should see in OpenCTI
 
-On the `1.1.1.1` observable's **Knowledge → Relationships** tab, eight new
-`related-to` rows pointing at the eight domains (more if `$limit` is
-increased).
+On the `1.1.1.1` observable:
+
+- **Knowledge → Relationships** shows eight `NAMESERVER_FOR`-equivalent
+  rows (collapsed to `related-to` with the original edge type in
+  `description`), plus one `ANNOUNCED_BY` row pointing at the
+  Cloudflare AS.
+- **Analyses → Notes** has at least the `Whisper network context` Note;
+  if the IP is threat-listed, a `Whisper threat intelligence` Note too.
 
 ## Why "related-to" instead of something specific
 
 STIX 2.1's standard relationship vocabulary doesn't have a `nameserver-for`
 type. The closest, semantically, would be a custom relationship type - which
 OpenCTI accepts but breaks downstream STIX consumers that strictly validate.
-For the MVP we lean on `related-to` and rely on the source/target types to
-convey "this IP is a nameserver for this domain". If a downstream workflow
-needs to filter specifically on nameserver records, lift the edge type into
-the description field (follow-up work - there's a TODO in
-[result_parser.py](../../src/connector/result_parser.py)).
+For the MVP we lean on `related-to` and rely on the source/target types
++ the `description` field to convey "this IP is a nameserver for this
+domain" (`description="NAMESERVER_FOR"`) vs "this IP is announced by this
+ASN" (`description="ANNOUNCED_BY"`). Custom STIX relationship types
+require platform-side support and remain out of scope for the MVP.

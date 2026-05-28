@@ -11,9 +11,12 @@ Output shape (consumed by ``stix_mapper.build_bundle``):
 - ``nodes`` - list of ``{"id", "type", "properties"}``
 - ``edges`` - list of ``{"source_id", "target_id", "type", "properties"}``
 
-Whisper labels without a clean STIX equivalent (CITY, COUNTRY, FEED_SOURCE,
-PREFIX, REGISTERED_PREFIX, ANNOUNCED_PREFIX, ORGANIZATION, RIR, TLD, etc.)
-are silently dropped. Edges that touch a dropped node are also dropped.
+Whisper labels currently mapped to STIX types (see ``_LABEL_TO_STIX_TYPE``):
+HOSTNAME, IPV4, IPV6, ASN, EMAIL, COUNTRY/CITY (→ Location SDO),
+ORGANIZATION/REGISTRAR (→ Identity SDO). Other labels (FEED_SOURCE, PREFIX,
+REGISTERED_PREFIX, ANNOUNCED_PREFIX, RIR, TLD, PHONE, etc.) are silently
+dropped - no clean STIX equivalent exists yet. Edges that touch a dropped
+node are also dropped.
 """
 
 import ipaddress
@@ -32,6 +35,10 @@ _LABEL_TO_STIX_TYPE: dict[str, str] = {
     "HOSTNAME": "domain-name",
     "ASN": "autonomous-system",
     "EMAIL": "email-addr",
+    "COUNTRY": "location",
+    "CITY": "location",
+    "ORGANIZATION": "identity",
+    "REGISTRAR": "identity",
 }
 
 # Whisper edge type → STIX relationship type. Anything not listed here
@@ -170,6 +177,38 @@ def _translate_node(cell: dict) -> dict | None:
             return None
         props["number"] = int(match.group(1))
         props["name"] = name
+    elif stix_type == "location":
+        if label == "COUNTRY":
+            # Whisper COUNTRY nodes carry ISO 3166-1 alpha-2 codes in `name`
+            # (e.g. "US", "GB"). Map to STIX Location's `country` field.
+            props["country"] = str(name).upper()
+        elif label == "CITY":
+            # Whisper CITY format: "<City Name>, <CC>" (e.g. "Mountain View,
+            # US"). STIX 2.1 Location requires at least country/region/
+            # lat-long, so if we can't extract a country code from the
+            # CITY name we drop the node rather than ship something the
+            # stix2 builder would reject.
+            parts = [p.strip() for p in str(name).rsplit(",", 1)]
+            if len(parts) == 2 and len(parts[1]) == 2 and parts[1].isalpha():
+                props["city"] = parts[0]
+                props["country"] = parts[1].upper()
+                props["name"] = str(name)
+            else:
+                logger.debug("dropping CITY with unparseable country code suffix: %r", name)
+                return None
+    elif stix_type == "identity":
+        # ORGANIZATION and REGISTRAR both surface as Identity SDOs with
+        # identity_class="organization". The relationship's description
+        # field (set by the edge-mapping path) carries the original
+        # Whisper edge type (e.g. REGISTERED_BY) so analysts can tell a
+        # registrar apart from an owning organization.
+        cleaned = str(name)
+        if label == "REGISTRAR" and cleaned.lower().startswith("registrar:"):
+            cleaned = cleaned[len("registrar:") :].strip()
+        if not cleaned:
+            return None
+        props["name"] = cleaned
+        props["identity_class"] = "organization"
     else:
         props["value"] = name
 
