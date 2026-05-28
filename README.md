@@ -40,6 +40,7 @@ versions causes the connector to fail at registration time.
 | `IPv4-Addr` | `IPV4` |
 | `IPv6-Addr` | `IPV6` |
 | `Domain-Name` | `HOSTNAME` |
+| `Autonomous-System` | `ASN` |
 
 `Url`, `StixFile`, and `Email-Addr` are deliberately **not** in scope for the
 MVP - Whisper has no direct label for URLs or file hashes, and email enrichment
@@ -299,7 +300,7 @@ also accepted in a mounted `config.yml` (see [config.yml.sample](./config.yml.sa
 | `CONNECTOR_ID` | yes | - | A unique UUIDv4 for this connector instance. Generate once with `uuidgen` and keep it stable across restarts. |
 | `CONNECTOR_NAME` | no | `Whisper` | Display name in the OpenCTI UI. |
 | `CONNECTOR_TYPE` | no | `INTERNAL_ENRICHMENT` | Do not change - the connector is an internal-enrichment type only. |
-| `CONNECTOR_SCOPE` | no | `IPv4-Addr,IPv6-Addr,Domain-Name` | Which entity types this connector responds to. Adding types that the connector doesn't actually support (e.g. `Url`, `StixFile`) just produces "not supported" log lines. |
+| `CONNECTOR_SCOPE` | no | `IPv4-Addr,IPv6-Addr,Domain-Name,Autonomous-System` | Which entity types this connector responds to. Adding types that the connector doesn't actually support (e.g. `Url`, `StixFile`) just produces "not supported" log lines. |
 | `CONNECTOR_AUTO` | no | `false` | If `true`, OpenCTI automatically enriches every new in-scope observable. Leave `false` until you're confident about Whisper API quota. |
 | `CONNECTOR_LOG_LEVEL` | no | `info` | One of `debug`, `info`, `warning`, `error`. |
 

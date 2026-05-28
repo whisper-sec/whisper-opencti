@@ -23,6 +23,7 @@ QUERIES: dict[str, str] = {
     "IPv4-Addr": "MATCH (n:IPV4 {name: $value})-[r]-(m) RETURN n, r, m LIMIT $limit",
     "IPv6-Addr": "MATCH (n:IPV6 {name: $value})-[r]-(m) RETURN n, r, m LIMIT $limit",
     "Domain-Name": "MATCH (n:HOSTNAME {name: $value})-[r]-(m) RETURN n, r, m LIMIT $limit",
+    "Autonomous-System": "MATCH (n:ASN {name: $value})-[r]-(m) RETURN n, r, m LIMIT $limit",
 }
 
 
