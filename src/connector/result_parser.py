@@ -58,6 +58,31 @@ _EDGE_DIRECTION_SOURCE: dict[str, set[str]] = {
 _ASN_NAME_RE = re.compile(r"^AS(\d+)$", re.IGNORECASE)
 
 
+def _is_valid_domain_name(value: str) -> bool:
+    """RFC 1035 / 1123-compliant domain name check.
+
+    OpenCTI's worker validates STIX `domain-name` SCO values against the
+    spec and rejects malformed values (e.g. with `FUNCTIONAL_ERROR:
+    Observable is not correctly formatted`). Whisper sometimes returns
+    DNS subdomain records whose names contain characters that are valid
+    DNS labels for specific record types (TXT/SPF/DKIM/DMARC use
+    underscored labels like `_spf.example.com`) but are NOT valid
+    general-purpose domain names per RFC 1035. We filter those at parse
+    time so the bundle doesn't ship objects OpenCTI will reject — keeps
+    the work-item status honest and avoids orphan relationships.
+    """
+    if not value or len(value) > 253 or value.endswith("."):
+        return False
+    for label in value.split("."):
+        if not (1 <= len(label) <= 63):
+            return False
+        if label.startswith("-") or label.endswith("-"):
+            return False
+        if not all(c.isalnum() or c == "-" for c in label):
+            return False
+    return True
+
+
 def parse_cypher_result(result: CypherResult) -> tuple[list[dict], list[dict]]:
     """Walk a CypherResult and produce normalized (nodes, edges) for build_bundle."""
     nodes_by_id: dict[str, dict] = {}
@@ -121,7 +146,15 @@ def _translate_node(cell: dict) -> dict | None:
             ip = ipaddress.ip_address(name)
             label = "IPV6" if isinstance(ip, ipaddress.IPv6Address) else "IPV4"
         except ValueError:
-            pass
+            # Not an IP — validate as RFC 1035 domain name before letting
+            # this become a STIX domain-name SCO. Whisper returns some DNS
+            # records (SPF/DKIM/DMARC subdomains containing underscores
+            # like `_spf_telus_com.nssi.telus.com`) that OpenCTI rejects
+            # at ingestion. Drop them here so the bundle stays consistent
+            # with what OpenCTI will accept (issue #47).
+            if not _is_valid_domain_name(name):
+                logger.debug("dropping HOSTNAME with non-RFC-1035 value: %r", name)
+                return None
 
     stix_type = _LABEL_TO_STIX_TYPE.get(label)
     if stix_type is None:
