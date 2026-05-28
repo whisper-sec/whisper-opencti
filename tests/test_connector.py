@@ -146,8 +146,8 @@ def test_process_message_returns_no_mappable_rels_when_only_seed_remains(connect
         rows=[
             {
                 "n": {"nodeId": "1", "label": "IPV4", "name": "8.8.8.8"},
-                "r": {"type": "LOCATED_IN"},
-                "m": {"nodeId": "2", "label": "CITY", "name": "Mountain View, US"},
+                "r": {"type": "BELONGS_TO"},
+                "m": {"nodeId": "2", "label": "PREFIX", "name": "8.8.8.0/24"},
             }
         ],
         statistics={},
@@ -188,3 +188,63 @@ def test_process_message_accepts_observable_value_or_value_field(connector, help
     client.execute_cypher.assert_called_once()
     query = client.execute_cypher.call_args[0][0]
     assert '"example.test"' in query
+
+
+def test_process_message_enriches_autonomous_system_via_asn_anchor(connector, helper, client):
+    # Issue #48: Autonomous-System is now an in-scope entity type. The
+    # connector must derive the Whisper-anchor value from the observable's
+    # `number` field (OpenCTI's `observable_value` for autonomous-system
+    # is the AS *name* like "Google LLC", not the canonical "AS<number>"
+    # form Whisper uses), then issue an ASN-anchored Cypher query.
+    helper.api.stix_cyber_observable.read.return_value = {
+        "id": "autonomous-system--x",
+        "entity_type": "Autonomous-System",
+        "observable_value": "Google LLC",  # human-readable name
+        "number": 15169,
+        "name": "Google LLC",
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"],
+        rows=[
+            {
+                "n": {"nodeId": "1", "label": "ASN", "name": "AS15169"},
+                "r": {"type": "BELONGS_TO"},
+                "m": {"nodeId": "2", "label": "IPV4", "name": "8.8.8.8"},
+            }
+        ],
+        statistics={"rowCount": 1, "executionTimeMs": 5},
+    )
+
+    result = connector._process_message({"entity_id": "autonomous-system--x"})
+    assert "Enriched AS15169" in result
+
+    # Cypher template fired with the ASN anchor + AS-number-derived value,
+    # not the human-readable AS name.
+    query = client.execute_cypher.call_args[0][0]
+    assert ":ASN" in query
+    assert '"AS15169"' in query
+    assert "Google LLC" not in query
+
+    helper.send_stix2_bundle.assert_called_once()
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    types = [o["type"] for o in bundle["objects"]]
+    assert "autonomous-system" in types
+    assert "ipv4-addr" in types
+
+
+def test_process_message_autonomous_system_without_number_falls_back(connector, helper, client):
+    # Edge case: if the observable somehow lacks a `number` field (older
+    # OpenCTI versions, manual STIX import, etc.), we fall back to whatever
+    # observable_value / value carries — even if it likely won't match a
+    # Whisper ASN node. Better to issue the query and return "No Whisper
+    # data" than crash.
+    helper.api.stix_cyber_observable.read.return_value = {
+        "id": "autonomous-system--x",
+        "entity_type": "Autonomous-System",
+        "observable_value": "Some-Network",
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"], rows=[], statistics={}
+    )
+    result = connector._process_message({"entity_id": "autonomous-system--x"})
+    assert "No Whisper data for Some-Network" in result
