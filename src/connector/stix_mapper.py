@@ -228,8 +228,17 @@ def map_edge(edge: dict, source_stix: Any, target_stix: Any) -> stix2.Relationsh
     return stix2.Relationship(**kwargs)
 
 
-def build_bundle(nodes: list[dict], edges: list[dict]) -> stix2.Bundle:
+def build_bundle(
+    nodes: list[dict],
+    edges: list[dict],
+    extra_objects: list[Any] | None = None,
+) -> stix2.Bundle:
     """Map a list of Whisper nodes + edges into a STIX 2.1 Bundle.
+
+    ``extra_objects`` is for already-constructed STIX objects the connector
+    wants included in the same bundle - typically Notes built via
+    ``build_note`` (e.g. for `LINKS_TO` cap-overflow summaries or threat
+    feed evidence). They're appended after the node-and-edge objects.
 
     Edges that reference unknown nodes raise StixMappingError.
     """
@@ -251,4 +260,36 @@ def build_bundle(nodes: list[dict], edges: list[dict]) -> stix2.Bundle:
             )
         objects.append(map_edge(edge, src, dst))
 
+    if extra_objects:
+        objects.extend(extra_objects)
+
     return stix2.Bundle(objects=objects)
+
+
+def build_note(
+    seed_stix_id: str,
+    content: str,
+    abstract: str = "Whisper enrichment note",
+) -> stix2.Note:
+    """Build a STIX 2.1 Note SDO attached to a seed observable's STIX ID.
+
+    The Note's ID is UUIDv5 derived from (seed_stix_id, content) so
+    re-enrichment with the same content produces the same Note ID - keeps
+    OpenCTI deduplication clean.
+
+    Used by the connector for:
+    - `LINKS_TO` cap-overflow summaries ("Whisper found N inbound links,
+      showing first 25")
+    - threat feed evidence (which feeds the seed appears in - see #51's
+      pattern for invalid hostnames)
+    - node-level threat property summaries
+    """
+    if not seed_stix_id or not content:
+        raise StixMappingError("build_note requires both seed_stix_id and content")
+    note_uuid = str(uuid.uuid5(WHISPER_NAMESPACE, f"note|{seed_stix_id}|{content}"))
+    return stix2.Note(
+        id=f"note--{note_uuid}",
+        abstract=abstract,
+        content=content,
+        object_refs=[seed_stix_id],
+    )

@@ -74,9 +74,13 @@ item) and the user-visible state in the UI.
 | **TC-08** | Bad API key | Set `WHISPER_API_KEY=invalid` in env, restart, enrich any seed | Work item marked **Failed**. Logs show `WhisperAuthError`. |
 | **TC-09** | Whisper unreachable | Block `graph.whisper.security` at the firewall, enrich any seed | Work item marked **Failed** after retries. Logs show `WhisperTransportError`. |
 | **TC-10** | Re-enrich idempotency | Run TC-01 twice in a row | Same `domain-name` / `ipv4-addr` SCO IDs both times. Existing entities are updated, not duplicated. |
-| **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. FEED_SOURCE / CITY / COUNTRY etc. neighbours are absent (parser-dropped). |
+| **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. `PREFIX` / `RIR` / `TLD` etc. neighbours are absent (parser-dropped). `COUNTRY`/`CITY` ARE mapped now (Phase 2) - expect `Location` SDOs. |
 | **TC-12** | Connector restart | `make dev-restart` mid-enrichment of a slow query | Connector re-registers cleanly; the in-flight work item is retried by OpenCTI. |
 | **TC-13** | Green-path AS | Create `Autonomous-System AS15169`, enrich | Status `Enriched AS15169 with N STIX objects (…ms)`. `Knowledge → Relationships` populated. |
+| **TC-14** | LINKS_TO direction + cap | Enrich `Domain-Name google.com` | **Knowledge → Relationships** has separate `LINKS_TO outbound` (seed → neighbour) and `LINKS_TO inbound` (neighbour → seed) rows in the `description` column. **Analyses → Notes** contains a `LINKS_TO neighbour overflow` note (google.com has ~12M inbound). |
+| **TC-15** | Threat intel Note | Enrich `Domain-Name malware-traffic-analysis.net` | **Analyses → Notes** contains a `Whisper threat intelligence` note with `Threat assessment: MEDIUM (score 3.169)`, ISO-8601 first/last seen, and a `Listed in 2 source(s)` block naming the feeds. |
+| **TC-16** | IP network context | Enrich `IPv4-Addr 8.8.8.8` | **Knowledge** shows a new `related-to` row pointing at an `Autonomous-System` SCO (`AS15169 - GOOGLE - Google LLC`) tagged `description="ANNOUNCED_BY"`. **Analyses → Notes** contains a `Whisper network context` note with announced prefix `8.8.8.0/24`, BGP flags, and `ANNOUNCED_PREFIX threat: LOW (score 1)`. |
+| **TC-17** | Re-enrich Note idempotency | Run TC-15 twice in a row | Same Note `standard_id` both times. OpenCTI does NOT create a duplicate Note. |
 
 ## 4. Known limitations / non-goals for the MVP
 
@@ -84,20 +88,28 @@ These are intentional gaps in this release - please don't file bugs against
 them. Future-iteration items, each tracked in a follow-up ticket as the
 roadmap firms up.
 
-1. **Threat properties on the seed are not lifted into STIX `indicator` SDOs.**
-   Whisper carries `threatScore`, `threatLevel`, `isMalware`, etc. on threat-listed
-   nodes; the parser ignores those today. See
-   [scenario 3](./scenarios/03-threat-intel-pivot.md).
-2. **Only one hop of traversal.** `LIMIT 50` neighbours of the seed.
-   Multi-hop chains (`(seed)-[*1..2]-(neighbour)`) are out of scope.
+1. **Threat properties on the seed are surfaced via a Note, not a STIX
+   `indicator` SDO.** Whisper's `threatScore`, `threatLevel`, 13 boolean
+   flags, and feed listings now appear in a `Whisper threat intelligence`
+   Note attached to the seed (Phase B of #48). They are NOT yet lifted
+   into proper STIX `indicator` SDOs with `indicator_types` and patterns,
+   so downstream rule engines that key off STIX indicators won't see
+   them. See [scenario 3](./scenarios/03-threat-intel-pivot.md).
+2. **One hop only for the main query; supplementary passes may chain
+   further.** The main `MATCH (n)-[r]-(m)` template is single-hop with
+   `LIMIT 50` (`DEFAULT_LIMIT` in `queries.py`). The Phase A LINKS_TO
+   directed/count templates and the Phase C network-context template
+   (IP → ANNOUNCED_PREFIX → ASN) are still scope-bounded but cross
+   multiple edges. Open-ended multi-hop traversal (`(seed)-[*1..2]-`) is
+   out of scope.
 3. **SDO support is partial.** The STIX mapper natively supports
-   `threat-actor`, `malware`, `location` (Country / City), and `identity`
-   (Organization / Registrar) SDOs. Whisper labels that don't yet map to
-   any STIX type (`FEED_SOURCE`, `PREFIX`, `REGISTERED_PREFIX`,
-   `ANNOUNCED_PREFIX`, `RIR`, `TLD`, `PHONE`, etc.) are silently dropped.
-   Surfacing those - particularly `ANNOUNCED_PREFIX` (for routed prefixes
-   on ASN enrichments) and `FEED_SOURCE` (for threat-feed visibility) -
-   is follow-up scope under #48's broader enrichment-output work.
+   `threat-actor`, `malware`, `location` (Country / City), `identity`
+   (Organization / Registrar), and `autonomous-system` (via the Phase C
+   network-context pass) SDOs. `FEED_SOURCE` and `ANNOUNCED_PREFIX`
+   labels are now surfaced via Notes (see Phases B and C) rather than
+   silently dropped. Whisper labels that remain genuinely unmapped -
+   `PREFIX`, `REGISTERED_PREFIX`, `RIR`, `TLD`, `PHONE`, `EMAIL` (no
+   query template), `CATEGORY` - are still dropped at parse time.
 4. **`Url` and `StixFile` are out of scope.** Whisper has no native label for
    URLs or file hashes.
 5. **Email-addr is technically supported in the mapper but not in the query
@@ -147,7 +159,7 @@ When filing, please include:
 
 QA acceptance criteria for closing the milestone:
 
-- [ ] TC-01 through TC-12 all pass on a fresh `make dev-up`.
+- [ ] TC-01 through TC-17 all pass on a fresh `make dev-up`.
 - [ ] All three scenarios in [docs/scenarios/](./scenarios/) reproduce against
   the live Whisper graph (results will differ from the captured examples;
   shape and types should match).
