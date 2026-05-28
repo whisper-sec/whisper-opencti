@@ -267,3 +267,54 @@ def test_parse_resolves_to_keeps_dedicated_type_with_no_description():
     _nodes, edges = parse_cypher_result(_result(rows))
     assert edges[0]["type"] == "resolves-to"
     assert "description" not in edges[0]["properties"]
+
+
+def test_parse_drops_hostname_with_underscores_rfc1035_violation():
+    # Issue #47: Whisper sometimes returns DNS records whose names contain
+    # underscores (e.g. SPF/DKIM/DMARC subdomains). OpenCTI rejects these
+    # as malformed STIX domain-name SCOs. The parser should drop them so
+    # the bundle ships only ingestion-valid objects.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "telus.ca"},
+            "r": {"type": "NAMESERVER_FOR"},
+            "m": {
+                "nodeId": "2",
+                "label": "HOSTNAME",
+                "name": "_spf_telus_com.nssi.telus.com",
+            },
+        }
+    ]
+    nodes, edges = parse_cypher_result(_result(rows))
+    # Only the seed survives - the underscored neighbour drops + the edge
+    # touching it drops with it.
+    assert [n["properties"]["value"] for n in nodes] == ["telus.ca"]
+    assert edges == []
+
+
+def test_parse_drops_hostname_with_other_invalid_chars():
+    # Wildcards, leading hyphens, label > 63 chars, trailing dot, empty
+    # labels - anything outside RFC 1035 alnum/hyphen, hyphen-not-at-edge,
+    # label-1-to-63-chars should also be dropped.
+    invalid_names = [
+        "*.example.com",
+        "-leading-hyphen.example.com",
+        "trailing-.example.com",
+        "double..dot.example.com",
+        "endsdot.example.com.",
+        "x" * 254,
+    ]
+    for name in invalid_names:
+        rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": name}}]
+        nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+        assert nodes == [], f"expected drop for {name!r}, got {nodes}"
+
+
+def test_parse_keeps_valid_punycode_idn_hostname():
+    # RFC-valid domain forms that include punycode IDN labels should pass
+    # the validation - e.g. `xn--example.com`.
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "xn--bcher-kva.example"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert len(nodes) == 1
+    assert nodes[0]["type"] == "domain-name"
+    assert nodes[0]["properties"]["value"] == "xn--bcher-kva.example"
