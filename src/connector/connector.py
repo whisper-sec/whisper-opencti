@@ -57,6 +57,16 @@ class WhisperConnector:
     def _enrich_observable(self, observable: dict) -> str:
         entity_type = observable.get("entity_type")
         entity_value = observable.get("observable_value") or observable.get("value")
+
+        # Autonomous-System: OpenCTI exposes the human-readable AS name as
+        # `observable_value` (e.g. "Google LLC") and the AS number as a
+        # separate `number` field. Whisper's ASN nodes are keyed by the
+        # canonical `AS<number>` string, so we have to convert here. Issue #48.
+        if entity_type == "Autonomous-System":
+            asn_number = observable.get("number")
+            if asn_number is not None:
+                entity_value = f"AS{asn_number}"
+
         if not entity_value:
             return f"observable {observable.get('id')!r} has no value to enrich"
 

@@ -48,11 +48,13 @@ def test_parse_hostname_to_ipv4_via_resolves_to_keeps_direction():
 
 
 def test_parse_drops_unsupported_neighbor():
+    # PREFIX has no STIX-side type in the parser table → drop, plus the
+    # edge touching it drops with it.
     rows = [
         {
             "n": {"nodeId": "1", "label": "IPV4", "name": "8.8.8.8"},
-            "r": {"type": "LOCATED_IN"},
-            "m": {"nodeId": "2", "label": "CITY", "name": "Mountain View, US"},
+            "r": {"type": "BELONGS_TO"},
+            "m": {"nodeId": "2", "label": "PREFIX", "name": "8.8.8.0/24"},
         }
     ]
     nodes, edges = parse_cypher_result(_result(rows))
@@ -318,3 +320,92 @@ def test_parse_keeps_valid_punycode_idn_hostname():
     assert len(nodes) == 1
     assert nodes[0]["type"] == "domain-name"
     assert nodes[0]["properties"]["value"] == "xn--bcher-kva.example"
+
+
+def test_parse_country_node_maps_to_location_with_iso_code():
+    # Issue #48 / option-3 follow-up: Whisper COUNTRY nodes (ISO 3166-1
+    # alpha-2 codes in `name`) should produce STIX Location SDOs.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "ASN", "name": "AS15169"},
+            "r": {"type": "HAS_COUNTRY"},
+            "m": {"nodeId": "2", "label": "COUNTRY", "name": "US"},
+        }
+    ]
+    nodes, edges = parse_cypher_result(_result(rows))
+    types_by_id = {n["id"]: n["type"] for n in nodes}
+    assert types_by_id == {"1": "autonomous-system", "2": "location"}
+
+    location_node = next(n for n in nodes if n["type"] == "location")
+    assert location_node["properties"]["country"] == "US"
+
+    # Edge falls back to related-to with HAS_COUNTRY in description.
+    assert len(edges) == 1
+    assert edges[0]["type"] == "related-to"
+    assert edges[0]["properties"]["description"] == "HAS_COUNTRY"
+
+
+def test_parse_country_lowercase_name_uppercases_country_code():
+    # Defensive: STIX Location's `country` is ISO 3166-1 alpha-2 (uppercase
+    # by convention). Whisper data is usually uppercase but normalize anyway.
+    rows = [{"n": {"nodeId": "1", "label": "COUNTRY", "name": "us"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["properties"]["country"] == "US"
+
+
+def test_parse_city_extracts_country_code_from_comma_suffix():
+    # Whisper CITY format is "<City Name>, <CC>" - split into city + country.
+    rows = [{"n": {"nodeId": "1", "label": "CITY", "name": "Mountain View, US"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["type"] == "location"
+    props = nodes[0]["properties"]
+    assert props["city"] == "Mountain View"
+    assert props["country"] == "US"
+    # Full raw value retained so the Location SDO has a human-readable name.
+    assert props["name"] == "Mountain View, US"
+
+
+def test_parse_city_without_country_suffix_is_dropped():
+    # STIX 2.1 Location requires at least country/region/lat-long. If we
+    # can't extract a country code from the CITY name we drop the node
+    # rather than emit something the stix2 builder would reject.
+    rows = [{"n": {"nodeId": "1", "label": "CITY", "name": "Just a City Name"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes == []
+
+
+def test_parse_organization_maps_to_identity():
+    # Issue #48 follow-up: Whisper ORGANIZATION nodes → STIX Identity SDOs
+    # with identity_class="organization".
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "google.com"},
+            "r": {"type": "REGISTERED_BY"},
+            "m": {"nodeId": "2", "label": "ORGANIZATION", "name": "Google LLC"},
+        }
+    ]
+    nodes, edges = parse_cypher_result(_result(rows))
+    types_by_id = {n["id"]: n["type"] for n in nodes}
+    assert types_by_id["2"] == "identity"
+    identity = next(n for n in nodes if n["id"] == "2")
+    assert identity["properties"]["name"] == "Google LLC"
+    assert identity["properties"]["identity_class"] == "organization"
+    # Edge carries the Whisper edge type in description so analysts can
+    # distinguish a registrar from an owning organization.
+    assert edges[0]["properties"]["description"] == "REGISTERED_BY"
+
+
+def test_parse_registrar_strips_prefix_and_maps_to_identity():
+    # Whisper REGISTRAR names carry a `registrar:` prefix (e.g.
+    # "registrar:tucows domains inc.."). Strip the prefix so the Identity
+    # SDO has a clean human-readable name.
+    rows = [{"n": {"nodeId": "1", "label": "REGISTRAR", "name": "registrar:Tucows Domains Inc."}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["type"] == "identity"
+    assert nodes[0]["properties"]["name"] == "Tucows Domains Inc."
+
+
+def test_parse_registrar_without_prefix_kept_as_is():
+    rows = [{"n": {"nodeId": "1", "label": "REGISTRAR", "name": "Some Registrar Inc"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["properties"]["name"] == "Some Registrar Inc"

@@ -128,6 +128,46 @@ def _map_malware(node: dict) -> stix2.Malware:
     )
 
 
+def _map_location(node: dict) -> stix2.Location:
+    # Whisper COUNTRY → STIX Location with `country` only.
+    # Whisper CITY    → STIX Location with `city`+`country`+`name` (when
+    #                   the "<City>, <CC>" suffix is parseable; otherwise
+    #                   just `name` with the raw Whisper string).
+    # UUIDv5 ID under WHISPER_NAMESPACE so re-enrichment keyed off the
+    # same Whisper node produces the same Location SDO and OpenCTI
+    # deduplicates.
+    props = node.get("properties") or {}
+    # STIX 2.1 Location requires at least one of country/region/lat-long.
+    # The parser only produces Location nodes when it has a country, so
+    # raise loudly if that invariant is violated.
+    if not props.get("country") and not props.get("region"):
+        raise StixMappingError(
+            f"location node id={node.get('id')!r} requires at least country or region"
+        )
+    kwargs: dict[str, Any] = {"id": f"location--{_whisper_uuid5(node['id'])}"}
+    for stix_field in ("country", "city", "name", "region"):
+        if props.get(stix_field):
+            kwargs[stix_field] = props[stix_field]
+    return stix2.Location(**kwargs)
+
+
+def _map_identity(node: dict) -> stix2.Identity:
+    # Whisper ORGANIZATION and REGISTRAR nodes both become Identity SDOs
+    # with identity_class="organization". The edge's `description` field
+    # (set by the parser when the Whisper edge type has no dedicated STIX
+    # equivalent - see issue #31's pattern) carries the original Whisper
+    # edge type (REGISTERED_BY, ORG_OF, etc.) so the relationship still
+    # tells an analyst whether a given Identity is a registrar vs an
+    # owner vs a contact organization.
+    props = node.get("properties") or {}
+    _require_props(node, "name")
+    return stix2.Identity(
+        id=f"identity--{_whisper_uuid5(node['id'])}",
+        name=props["name"],
+        identity_class=props.get("identity_class", "organization"),
+    )
+
+
 NODE_MAPPERS: dict[str, Callable[[dict], Any]] = {
     "ipv4-addr": _map_ipv4,
     "ipv6-addr": _map_ipv6,
@@ -138,6 +178,8 @@ NODE_MAPPERS: dict[str, Callable[[dict], Any]] = {
     "file": _map_file,
     "threat-actor": _map_threat_actor,
     "malware": _map_malware,
+    "location": _map_location,
+    "identity": _map_identity,
 }
 
 ALLOWED_RELATIONSHIPS: frozenset[str] = frozenset(

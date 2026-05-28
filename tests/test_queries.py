@@ -8,7 +8,12 @@ from src.connector.queries import (
 
 
 def test_supported_entity_types_is_the_mvp_set():
-    assert supported_entity_types() == {"IPv4-Addr", "IPv6-Addr", "Domain-Name"}
+    assert supported_entity_types() == {
+        "IPv4-Addr",
+        "IPv6-Addr",
+        "Domain-Name",
+        "Autonomous-System",
+    }
 
 
 def test_get_query_substitutes_value_and_limit_into_literals():
@@ -61,6 +66,18 @@ def test_query_templates_anchor_on_whisper_uppercase_labels():
     assert ":IPV4" in QUERIES["IPv4-Addr"]
     assert ":IPV6" in QUERIES["IPv6-Addr"]
     assert ":HOSTNAME" in QUERIES["Domain-Name"]
+    assert ":ASN" in QUERIES["Autonomous-System"]
+
+
+def test_get_query_handles_autonomous_system_value():
+    # OpenCTI Autonomous-System observable_value is conventionally "AS<n>"
+    # (e.g. "AS15169" for Google). Whisper's ASN node `name` is the same
+    # string, so the substitution must round-trip cleanly.
+    q = get_query_for_entity_type("Autonomous-System", value="AS15169", limit=50)
+    assert q is not None
+    assert '{name: "AS15169"}' in q
+    assert ":ASN" in q
+    assert "LIMIT 50" in q
 
 
 def test_default_limit_is_reasonable():
