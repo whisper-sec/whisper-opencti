@@ -12,7 +12,7 @@ services:
       - CONNECTOR_ID=${CONNECTOR_ID}
       - CONNECTOR_TYPE=INTERNAL_ENRICHMENT
       - CONNECTOR_NAME=Whisper
-      - CONNECTOR_SCOPE=IPv4-Addr,IPv6-Addr,Domain-Name
+      - CONNECTOR_SCOPE=IPv4-Addr,IPv6-Addr,Domain-Name,Autonomous-System
       - CONNECTOR_AUTO=false
       - CONNECTOR_LOG_LEVEL=info
       - WHISPER_API_URL=${WHISPER_API_URL}
