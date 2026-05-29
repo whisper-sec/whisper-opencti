@@ -14,9 +14,9 @@ in the project README. The short version:
 make dev-up
 ```
 
-Then drop a real `WHISPER_API_KEY` into [.env.dev](../.env.dev) (currently
-`dev-placeholder-key`) and `make dev-restart`. Without a real key every
-enrichment fails with `WhisperAuthError`.
+Then drop a real `WHISPER_API_KEY` into [.env](../.env.example) (copy
+`.env.example` first; the live file is gitignored) and `make dev-restart`.
+Without a real key every enrichment fails with `WhisperAuthError`.
 
 ### 1.2 Sanity check
 
@@ -24,7 +24,7 @@ Before running any test cases, confirm the green-path baseline works:
 
 1. <http://localhost:8080> → log in as `admin@whisper.local` / `ChangeMe-dev-only`.
 2. **Data → Ingestion → Connectors** → `Whisper` shows `Started`, scope
-   `IPv4-Addr, IPv6-Addr, Domain-Name`.
+   `IPv4-Addr, IPv6-Addr, Domain-Name, Autonomous-System`.
 3. **Data → Observations → Observables → Create**: `IPv4-Addr`, value
    `8.8.8.8`.
 4. Click into the observable, **Enrichment** panel → **Whisper**.
@@ -41,15 +41,14 @@ that the expected outcomes shouldn't shift wildly week-to-week.
 
 | Entity type | Value | Expected outcome |
 | --- | --- | --- |
-| `IPv4-Addr` | `8.8.8.8` | Multiple `related-to` relationships to other entities (DNS infrastructure). |
-| `IPv4-Addr` | `1.1.1.1` | Multiple `related-to` relationships, mostly to domains the IP is a nameserver for. |
-| `IPv4-Addr` | `192.0.2.1` (TEST-NET-1, RFC 5737) | No Whisper data → status string `No Whisper data for 192.0.2.1`, no relationships added. |
-| `IPv6-Addr` | `2001:4860:4860::8888` | At least one related entity. |
-| `Domain-Name` | `dns.google` | DNS + NAMESERVER_FOR pivot ([scenario 1](./scenarios/01-domain-dns-pivot.md)). |
-| `Domain-Name` | `malware-traffic-analysis.net` | LINKS_TO pivot, FEED_SOURCE neighbours dropped silently ([scenario 3](./scenarios/03-threat-intel-pivot.md)). |
-| `Domain-Name` | `this-should-never-exist-12345.invalid` | No Whisper data. |
-| `Autonomous-System` | `AS15169` (Google) | At least one related entity. |
-| `Autonomous-System` | `AS13335` (Cloudflare) | At least one related entity. |
+| `IPv4-Addr` | `8.8.8.8` | `Location` (Country US + City Mountain View, US), `Autonomous-System` SCO (AS15169, `description="ANNOUNCED_BY"`), `Whisper network context` Note (announced prefix, BGP flags, ANNOUNCED_PREFIX threat), and a `Whisper threat intelligence` Note when Whisper has threat data on the seed. |
+| `IPv4-Addr` | `1.1.1.1` | Multiple `related-to` relationships (NAMESERVER_FOR / MAIL_FOR / RESOLVES_TO surface as `related-to` with the Whisper edge type preserved in the relationship `description`); plus Country AU / City Sydney, AU; plus `Autonomous-System` SCO for AS13335 (Cloudflare) with `description="ANNOUNCED_BY"` and the matching network-context Note. |
+| `IPv6-Addr` | `2001:4860:4860::8888` | At least Country CA, City Montreal, CA, an `Autonomous-System` SCO for Google's announcing AS via `ANNOUNCED_BY`, plus the network-context Note. |
+| `Domain-Name` | `dns.google` | DNS + NAMESERVER_FOR pivot ([scenario 1](./scenarios/01-domain-dns-pivot.md)). Edges collapse to `related-to`; the original Whisper type (`RESOLVES_TO`, `NAMESERVER_FOR`, …) is preserved in the relationship `description`. |
+| `Domain-Name` | `malware-traffic-analysis.net` | LINKS_TO pivot with separate outbound/inbound rows (`description="LINKS_TO outbound"` / `"LINKS_TO inbound"`); FEED_SOURCE listings now surface as a `Whisper threat intelligence` Note attached to the seed ([scenario 3](./scenarios/03-threat-intel-pivot.md)). |
+| `Domain-Name` | `this-should-never-exist-12345.invalid` | No Whisper data → status string `No Whisper data for this-should-never-exist-12345.invalid`, no bundle sent. This is the reliable "no data" test seed - there is no equivalent IPv4 address (Whisper has BGP/DNS coverage on the RFC 5737 ranges, so `192.0.2.x` / `198.51.100.x` / `203.0.113.x` are *not* empty). |
+| `Autonomous-System` | `AS15169` (Google) | At least Country US (via `HAS_COUNTRY`). Routed prefixes / peer ASNs / ASN_NAME human label are NOT surfaced today - tracked as a follow-up. |
+| `Autonomous-System` | `AS13335` (Cloudflare) | At least Country US. Same ASN-side limitations apply. |
 | `Url` (out of scope) | any value | Status string `entity type 'Url' not supported by Whisper enrichment`. |
 | `StixFile` (out of scope) | any value | Status string `entity type 'StixFile' not supported by Whisper enrichment`. |
 
@@ -69,7 +68,7 @@ item) and the user-visible state in the UI.
 | **TC-03** | Green-path IPv6 | Create `IPv6-Addr 2001:4860:4860::8888`, enrich | Status `Enriched … with N STIX objects`. |
 | **TC-04** | Unsupported scope | Create `Url`, enrich | Connector is not offered in the Enrichment menu (OpenCTI filters by `CONNECTOR_SCOPE`). |
 | **TC-05** | Force unsupported via API | Trigger enrichment via OpenCTI GraphQL on a `Url` observable | Status `entity type 'Url' not supported by Whisper enrichment`. No bundle sent. |
-| **TC-06** | No Whisper data | Create `IPv4-Addr 192.0.2.1`, enrich | Status `No Whisper data for 192.0.2.1`. No new relationships in the UI. |
+| **TC-06** | No Whisper data | Create `Domain-Name this-should-never-exist-12345.invalid`, enrich | Status `No Whisper data for this-should-never-exist-12345.invalid`. No bundle sent, no new relationships in the UI. (Whisper's BGP/DNS coverage means the RFC 5737 IPv4 ranges are *not* empty - see §2 for why this can't be triggered with a documentation IP.) |
 | **TC-07** | Empty value | Create observable with missing `value` (edge case via API) | Status contains `no value to enrich`. |
 | **TC-08** | Bad API key | Set `WHISPER_API_KEY=invalid` in env, restart, enrich any seed | Work item marked **Failed**. Logs show `WhisperAuthError`. |
 | **TC-09** | Whisper unreachable | Block `graph.whisper.security` at the firewall, enrich any seed | Work item marked **Failed** after retries. Logs show `WhisperTransportError`. |
@@ -124,13 +123,19 @@ roadmap firms up.
 7. **No 429 / quota-aware back-off.** The Whisper client retries 5xx and
    connection errors but not 429. If Whisper rate-limits, the work item will
    fail with `WhisperQueryError`.
-8. **Custom STIX relationship types are not emitted.** Specific Whisper edges
-   like `NAMESERVER_FOR`, `MAIL_FOR`, `LINKS_TO`, `BELONGS_TO`, etc., all
-   collapse into STIX `related-to`. The original edge semantics are lost. See
-   [scenario 2](./scenarios/02-ip-as-nameserver.md).
-9. **No automated integration test against the live Whisper API in CI.** All
-   71 unit tests mock the HTTP boundary. A QA-time smoke test against a real
-   key is currently the only end-to-end check.
+8. **Custom STIX relationship types are not emitted; the original Whisper
+   edge type is preserved in the relationship `description`.** Specific
+   Whisper edges (`NAMESERVER_FOR`, `MAIL_FOR`, `BELONGS_TO`,
+   `ANNOUNCED_BY`, `LINKS_TO outbound`, `LINKS_TO inbound`, etc.) all
+   collapse into STIX `related-to` because OpenCTI's worker rejects
+   custom `relationship_type` values. The original semantics are NOT
+   lost - they're carried in the relationship's `description` field, so
+   analysts can still filter / read the original Whisper edge name in
+   the UI. Lifting these into proper custom STIX relationship types
+   requires platform-side support (issue #31).
+9. **No automated integration test against the live Whisper API in CI.**
+   All unit tests mock the HTTP boundary. A QA-time smoke test against a
+   real API key is currently the only end-to-end check.
 
 ## 5. Bug severity guide
 
