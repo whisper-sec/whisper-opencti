@@ -120,9 +120,15 @@ roadmap firms up.
    downstream consumers may not. See
    [scenario 1](./scenarios/01-domain-dns-pivot.md). Mitigation in a
    follow-up: IP-format detection at parse time.
-7. **No 429 / quota-aware back-off.** The Whisper client retries 5xx and
-   connection errors but not 429. If Whisper rate-limits, the work item will
-   fail with `WhisperQueryError`.
+7. **Rate-limit handling: 429s are retried up to `total=3` times honouring
+   `Retry-After`, then surface as `WhisperTransportError`.** The client
+   retries on 429 alongside 5xx and connection errors (issue #30). With a
+   typical Whisper `Retry-After: 60` quota window the worst-case hang on
+   an enrichment is roughly three minutes; on hard exhaustion the work
+   item fails with `WhisperTransportError` rather than `WhisperQueryError`
+   so QA can route it to a quota-incident bucket. There is still no
+   rate-limit-bucket awareness across concurrent enrichments - out of
+   scope for the MVP.
 8. **Custom STIX relationship types are not emitted; the original Whisper
    edge type is preserved in the relationship `description`.** Specific
    Whisper edges (`NAMESERVER_FOR`, `MAIL_FOR`, `BELONGS_TO`,
