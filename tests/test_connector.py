@@ -1144,3 +1144,129 @@ def test_network_context_omits_static_allocation_when_same_as_announced(connecto
         if o["type"] == "note" and o.get("abstract") == "Whisper network context"
     )
     assert "Static allocation" not in note["content"]
+
+
+# --- Dropped-HOSTNAME Note (issue #51) -------------------------------------
+
+
+def test_dropped_hostnames_note_emitted_with_seed_attachment(connector, helper, client):
+    # Main query has a NAMESERVER_FOR edge to an SPF-style invalid HOSTNAME.
+    # The parser drops it (per #47); the connector now ALSO surfaces it
+    # via a Note attached to the seed.
+    helper.api.stix_cyber_observable.read.return_value = {
+        "id": "domain-name--x",
+        "entity_type": "Domain-Name",
+        "value": "telus.ca",
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"],
+        rows=[
+            {
+                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "telus.ca"},
+                "r": {"type": "NAMESERVER_FOR"},
+                "m": {
+                    "nodeId": "ns-invalid",
+                    "label": "HOSTNAME",
+                    "name": "_spf_telus_com.nssi.telus.com",
+                },
+            },
+            {
+                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "telus.ca"},
+                "r": {"type": "NAMESERVER_FOR"},
+                "m": {
+                    "nodeId": "ns-valid",
+                    "label": "HOSTNAME",
+                    "name": "ns.telus.com",
+                },
+            },
+        ],
+        statistics={"executionTimeMs": 2},
+    )
+    connector._process_message({"entity_id": "domain-name--x"})
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    notes = [
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
+    ]
+    assert len(notes) == 1
+    note = notes[0]
+    assert "_spf_telus_com.nssi.telus.com" in note["content"]
+    assert "Whisper edge: NAMESERVER_FOR" in note["content"]
+    # Sanity: the VALID neighbour must not appear in the dropped list.
+    assert "ns.telus.com" not in note["content"]
+    # Note attached to the seed Domain-Name SCO.
+    seed_id = next(
+        o["id"]
+        for o in bundle["objects"]
+        if o["type"] == "domain-name" and o["value"] == "telus.ca"
+    )
+    assert note["object_refs"] == [seed_id]
+
+
+def test_dropped_hostnames_note_skipped_when_nothing_dropped(connector, helper, client):
+    # Clean enrichment with no underscore-bearing neighbours must not
+    # produce a dropped-records Note - bundle shape unchanged from
+    # pre-#51 behaviour.
+    helper.api.stix_cyber_observable.read.return_value = {
+        "id": "domain-name--x",
+        "entity_type": "Domain-Name",
+        "value": "telus.ca",
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"],
+        rows=[
+            {
+                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "telus.ca"},
+                "r": {"type": "RESOLVES_TO"},
+                "m": {"nodeId": "ip1", "label": "IPV4", "name": "1.2.3.4"},
+            }
+        ],
+        statistics={},
+    )
+    connector._process_message({"entity_id": "domain-name--x"})
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    assert not any(
+        o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
+        for o in bundle["objects"]
+        if o["type"] == "note"
+    )
+
+
+def test_dropped_hostnames_note_dedupes_same_name_across_rows(connector, helper, client):
+    # The same invalid HOSTNAME may appear in multiple rows (e.g. once
+    # via NAMESERVER_FOR, once via MAIL_FOR). The Note must list it
+    # exactly once - the first edge type wins so the content is stable.
+    helper.api.stix_cyber_observable.read.return_value = {
+        "id": "domain-name--x",
+        "entity_type": "Domain-Name",
+        "value": "example.com",
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"],
+        rows=[
+            {
+                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.com"},
+                "r": {"type": "NAMESERVER_FOR"},
+                "m": {"nodeId": "bad", "label": "HOSTNAME", "name": "_spf.example.com"},
+            },
+            {
+                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.com"},
+                "r": {"type": "MAIL_FOR"},
+                "m": {"nodeId": "bad", "label": "HOSTNAME", "name": "_spf.example.com"},
+            },
+        ],
+        statistics={},
+    )
+    connector._process_message({"entity_id": "domain-name--x"})
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    note = next(
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
+    )
+    # The dropped name must appear exactly once in the body.
+    assert note["content"].count("_spf.example.com") == 1
