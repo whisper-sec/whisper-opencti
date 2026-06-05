@@ -90,6 +90,57 @@ def _is_valid_domain_name(value: str) -> bool:
     return True
 
 
+def collect_dropped_hostnames(result: CypherResult) -> list[dict]:
+    """Return the HOSTNAME records that ``parse_cypher_result`` would silently
+    drop for failing the RFC 1035 check, paired with the Whisper edge type
+    that referenced each one.
+
+    The connector uses this to attach a STIX ``Note`` SDO to the seed
+    listing what was dropped, so analysts know Whisper had the data even
+    though it couldn't ship as a ``domain-name`` SCO (issue #51 builds on
+    #47's filter-and-drop foundation).
+
+    Each entry: ``{"name": str, "edge_type": str}``. ``edge_type`` is
+    empty when no edge cell exists in the same row (e.g. single-column
+    RETURN). Duplicates within a row are de-duplicated by name; the
+    caller is responsible for cross-row dedup.
+
+    IP-shaped HOSTNAME values (Whisper data quirk; reclassified to IPV4 /
+    IPV6 by the translator) are NOT counted as drops — they round-trip
+    fine, just on a different SCO type.
+    """
+    dropped: list[dict] = []
+    seen_in_row: set[str]
+    for row in result.rows:
+        if not isinstance(row, dict):
+            continue
+        seen_in_row = set()
+        host_drops: list[tuple[int, str]] = []
+        edges: list[tuple[int, str]] = []
+        for idx, col in enumerate(result.columns):
+            cell = row.get(col)
+            if not isinstance(cell, dict):
+                continue
+            if "nodeId" in cell and cell.get("label") == "HOSTNAME":
+                name = cell.get("name")
+                if not name or name in seen_in_row:
+                    continue
+                try:
+                    ipaddress.ip_address(name)
+                    continue  # IP-shaped HOSTNAME → reclassified, not dropped.
+                except ValueError:
+                    pass
+                if not _is_valid_domain_name(name):
+                    host_drops.append((idx, name))
+                    seen_in_row.add(name)
+            elif "type" in cell:
+                edges.append((idx, cell["type"]))
+        for node_idx, name in host_drops:
+            edge_type = min(edges, key=lambda e: abs(e[0] - node_idx))[1] if edges else ""
+            dropped.append({"name": name, "edge_type": edge_type})
+    return dropped
+
+
 def parse_cypher_result(result: CypherResult) -> tuple[list[dict], list[dict]]:
     """Walk a CypherResult and produce normalized (nodes, edges) for build_bundle."""
     nodes_by_id: dict[str, dict] = {}
