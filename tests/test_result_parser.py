@@ -1,4 +1,4 @@
-from src.connector.result_parser import parse_cypher_result
+from src.connector.result_parser import collect_dropped_hostnames, parse_cypher_result
 from src.connector.whisper_client import CypherResult
 
 
@@ -320,6 +320,113 @@ def test_parse_keeps_valid_punycode_idn_hostname():
     assert len(nodes) == 1
     assert nodes[0]["type"] == "domain-name"
     assert nodes[0]["properties"]["value"] == "xn--bcher-kva.example"
+
+
+# --- collect_dropped_hostnames (issue #51) ---------------------------------
+
+
+def test_collect_dropped_hostnames_returns_empty_for_clean_result():
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "telus.ca"},
+            "r": {"type": "NAMESERVER_FOR"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "ns.telus.com"},
+        }
+    ]
+    assert collect_dropped_hostnames(_result(rows)) == []
+
+
+def test_collect_dropped_hostnames_picks_up_underscored_subdomain():
+    # Issue #51 acceptance criterion: the exact telus.ca underscore case
+    # that triggered #47 must surface in the dropped-list with its edge.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "telus.ca"},
+            "r": {"type": "NAMESERVER_FOR"},
+            "m": {
+                "nodeId": "2",
+                "label": "HOSTNAME",
+                "name": "_spf_telus_com.nssi.telus.com",
+            },
+        }
+    ]
+    dropped = collect_dropped_hostnames(_result(rows))
+    assert dropped == [{"name": "_spf_telus_com.nssi.telus.com", "edge_type": "NAMESERVER_FOR"}]
+
+
+def test_collect_dropped_hostnames_handles_multiple_invalid_records():
+    # Two different invalid neighbours in two rows, each on a different
+    # Whisper edge. Both must surface.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "example.com"},
+            "r": {"type": "NAMESERVER_FOR"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "_spf.example.com"},
+        },
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "example.com"},
+            "r": {"type": "MAIL_FOR"},
+            "m": {"nodeId": "3", "label": "HOSTNAME", "name": "_dmarc.example.com"},
+        },
+    ]
+    dropped = collect_dropped_hostnames(_result(rows))
+    names = {d["name"]: d["edge_type"] for d in dropped}
+    assert names == {
+        "_spf.example.com": "NAMESERVER_FOR",
+        "_dmarc.example.com": "MAIL_FOR",
+    }
+
+
+def test_collect_dropped_hostnames_ignores_ip_shaped_hostname_quirk():
+    # Whisper data quirk: 8.8.4.4 is labelled HOSTNAME. The translator
+    # reclassifies these as IPV4/IPV6 - they round-trip cleanly as a
+    # different SCO type, NOT a drop. Must not appear in the dropped list.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "dns.google"},
+            "r": {"type": "RESOLVES_TO"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "8.8.4.4"},
+        }
+    ]
+    assert collect_dropped_hostnames(_result(rows)) == []
+
+
+def test_collect_dropped_hostnames_dedupes_within_a_row():
+    # Defensive: a single row that somehow lists the same invalid HOSTNAME
+    # twice (e.g. n and m both referencing the underscored name) shouldn't
+    # double-count.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "_dup.example.com"},
+            "r": {"type": "NAMESERVER_FOR"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "_dup.example.com"},
+        }
+    ]
+    dropped = collect_dropped_hostnames(_result(rows))
+    assert dropped == [{"name": "_dup.example.com", "edge_type": "NAMESERVER_FOR"}]
+
+
+def test_collect_dropped_hostnames_no_edge_in_row_still_records_drop():
+    # Single-column projection (e.g. RETURN n only) means no edge cell
+    # exists. The drop still has to be captured - edge_type is "" so the
+    # Note can show "(unknown edge)" instead of guessing.
+    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "_spf.example.com"}}]
+    dropped = collect_dropped_hostnames(_result(rows, columns=("n",)))
+    assert dropped == [{"name": "_spf.example.com", "edge_type": ""}]
+
+
+def test_collect_dropped_hostnames_skips_non_hostname_labels():
+    # FEED_SOURCE / PREFIX / RIR / etc. nodes with invalid-looking names
+    # are NOT dropped HOSTNAMEs - they're dropped for label-not-mapped
+    # reasons, which is a different problem. Don't conflate.
+    rows = [
+        {
+            "n": {"nodeId": "1", "label": "HOSTNAME", "name": "example.com"},
+            "r": {"type": "LISTED_IN"},
+            "m": {"nodeId": "2", "label": "FEED_SOURCE", "name": "my-feed-source"},
+        }
+    ]
+    assert collect_dropped_hostnames(_result(rows)) == []
 
 
 def test_parse_country_node_maps_to_location_with_iso_code():
