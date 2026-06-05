@@ -16,7 +16,7 @@ from src.connector.queries import (
     get_query_for_entity_type,
     get_threat_context_query,
 )
-from src.connector.result_parser import parse_cypher_result
+from src.connector.result_parser import collect_dropped_hostnames, parse_cypher_result
 from src.connector.stix_mapper import build_bundle, build_note
 from src.connector.whisper_client import WhisperClient
 
@@ -236,6 +236,35 @@ class WhisperConnector:
                     feed_line += " (" + ", ".join(seen) + ")"
                 lines.append(feed_line)
 
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_dropped_hostnames_content(dropped: list[dict]) -> str:
+        """Render the Note content listing HOSTNAME records the parser
+        dropped for failing the RFC 1035 check.
+
+        Dedupes by name across rows (the helper dedupes per-row but the
+        same name can appear in multiple rows via different edges) and
+        keeps the first edge type seen. Stable ordering by first
+        occurrence so the Note content is deterministic and the UUIDv5
+        on `build_note` idempotently dedupes in OpenCTI.
+        """
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for entry in dropped:
+            name = entry.get("name", "")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            unique.append(entry)
+        lines = [
+            "Whisper returned the following DNS record names that don't conform "
+            "to RFC 1035 and were not included as STIX domain-name observables:",
+            "",
+        ]
+        for entry in unique:
+            edge = entry.get("edge_type") or "(unknown edge)"
+            lines.append(f"  - {entry['name']}  (Whisper edge: {edge})")
         return "\n".join(lines)
 
     def _collect_threat_context(
@@ -506,6 +535,12 @@ class WhisperConnector:
 
         nodes, edges = parse_cypher_result(result)
 
+        # Capture HOSTNAME records the parser silently dropped for failing
+        # the RFC 1035 check (issue #51, builds on #47). Surfaced as a Note
+        # attached to the seed so the analyst sees what Whisper had even
+        # though we can't ship it as a domain-name SCO.
+        dropped_hostnames = collect_dropped_hostnames(result)
+
         # Supplementary LINKS_TO enrichment for Domain-Name seeds.
         try:
             extra_nodes, extra_edges, extra_notes = self._collect_links_to(
@@ -532,6 +567,20 @@ class WhisperConnector:
             )
             threat_notes = []
         extra_notes.extend(threat_notes)
+
+        # Dropped-HOSTNAME Note (issue #51). Independent of any
+        # supplementary query: built from the main result we already have.
+        if dropped_hostnames:
+            seed_stix_id = self._seed_stix_id(entity_type, entity_value, observable)
+            if seed_stix_id:
+                content = self._format_dropped_hostnames_content(dropped_hostnames)
+                extra_notes.append(
+                    build_note(
+                        seed_stix_id=seed_stix_id,
+                        content=content,
+                        abstract="Whisper dropped non-RFC-1035 DNS records",
+                    )
+                )
 
         # Supplementary network context for IPv4/IPv6 seeds — emits the
         # announcing-ASN as a real Autonomous-System SCO + related-to edge
