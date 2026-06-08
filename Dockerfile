@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.title="whisper-opencti" \
       org.opencontainers.image.description="OpenCTI connector that enriches indicators with Whisper graph data." \
       org.opencontainers.image.source="https://github.com/whisper-sec/whisper-opencti" \
       org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.licenses="Proprietary"
+      org.opencontainers.image.licenses="Apache-2.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
