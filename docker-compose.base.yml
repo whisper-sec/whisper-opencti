@@ -67,6 +67,9 @@ services:
       - APP__ADMIN__EMAIL=${OPENCTI_ADMIN_EMAIL}
       - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_PASSWORD}
       - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      # OpenCTI v7 requires a 32-byte base64-encoded encryption key.
+      # The committed default is for the local dev / qa stacks ONLY.
+      - APP__ENCRYPTION_KEY=${OPENCTI_ENCRYPTION_KEY}
       - APP__APP_LOGS__LOGS_LEVEL=error
       - REDIS__HOSTNAME=redis
       - REDIS__PORT=6379
