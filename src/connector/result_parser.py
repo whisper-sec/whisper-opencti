@@ -136,7 +136,9 @@ def collect_dropped_hostnames(result: CypherResult) -> list[dict]:
             elif "type" in cell:
                 edges.append((idx, cell["type"]))
         for node_idx, name in host_drops:
-            edge_type = min(edges, key=lambda e: abs(e[0] - node_idx))[1] if edges else ""
+            edge_type = (
+                min(edges, key=lambda e: abs(e[0] - node_idx))[1] if edges else ""
+            )
             dropped.append({"name": name, "edge_type": edge_type})
     return dropped
 
@@ -245,7 +247,9 @@ def _translate_node(cell: dict) -> dict | None:
                 props["country"] = parts[1].upper()
                 props["name"] = str(name)
             else:
-                logger.debug("dropping CITY with unparseable country code suffix: %r", name)
+                logger.debug(
+                    "dropping CITY with unparseable country code suffix: %r", name
+                )
                 return None
     elif stix_type == "identity":
         # ORGANIZATION and REGISTRAR both surface as Identity SDOs with

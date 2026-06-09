@@ -87,7 +87,11 @@ def _map_autonomous_system(node: dict) -> stix2.AutonomousSystem:
 def _map_file(node: dict) -> stix2.File:
     props = node.get("properties") or {}
     hashes: dict[str, str] = {}
-    for whisper_key, stix_key in (("md5", "MD5"), ("sha1", "SHA-1"), ("sha256", "SHA-256")):
+    for whisper_key, stix_key in (
+        ("md5", "MD5"),
+        ("sha1", "SHA-1"),
+        ("sha256", "SHA-256"),
+    ):
         if props.get(whisper_key):
             hashes[stix_key] = props[whisper_key]
     if not hashes and not props.get("name"):
@@ -109,13 +113,14 @@ def _map_file(node: dict) -> stix2.File:
 def _map_threat_actor(node: dict) -> stix2.ThreatActor:
     props = node.get("properties") or {}
     _require_props(node, "name")
-    kwargs: dict[str, Any] = {
-        "id": f"threat-actor--{_whisper_uuid5(node['id'])}",
-        "name": props["name"],
-    }
+    # Build id at the literal kwarg position — the vendored STIX-ID pylint
+    # plugin can't see through **kwargs spreads, so we keep id explicit at
+    # every stix2 _DomainObject / Relationship constructor site.
+    stix_id = f"threat-actor--{_whisper_uuid5(node['id'])}"
+    extras: dict[str, Any] = {}
     if props.get("description"):
-        kwargs["description"] = props["description"]
-    return stix2.ThreatActor(**kwargs)
+        extras["description"] = props["description"]
+    return stix2.ThreatActor(id=stix_id, name=props["name"], **extras)
 
 
 def _map_malware(node: dict) -> stix2.Malware:
@@ -144,11 +149,14 @@ def _map_location(node: dict) -> stix2.Location:
         raise StixMappingError(
             f"location node id={node.get('id')!r} requires at least country or region"
         )
-    kwargs: dict[str, Any] = {"id": f"location--{_whisper_uuid5(node['id'])}"}
+    # Build id at the literal kwarg position so the vendored STIX-ID
+    # pylint plugin can see it (it doesn't follow **kwargs spreads).
+    stix_id = f"location--{_whisper_uuid5(node['id'])}"
+    extras: dict[str, Any] = {}
     for stix_field in ("country", "city", "name", "region"):
         if props.get(stix_field):
-            kwargs[stix_field] = props[stix_field]
-    return stix2.Location(**kwargs)
+            extras[stix_field] = props[stix_field]
+    return stix2.Location(id=stix_id, **extras)
 
 
 def _map_identity(node: dict) -> stix2.Identity:
@@ -216,16 +224,20 @@ def map_edge(edge: dict, source_stix: Any, target_stix: Any) -> stix2.Relationsh
         raise StixMappingError(f"unsupported relationship type: {rel_type!r}")
 
     edge_key = edge.get("id") or f"{edge['source_id']}|{edge['target_id']}|{rel_type}"
-    kwargs: dict[str, Any] = {
-        "id": f"relationship--{_whisper_uuid5(edge_key)}",
-        "relationship_type": rel_type,
-        "source_ref": source_stix.id,
-        "target_ref": target_stix.id,
-    }
+    # id passed at the literal kwarg position so the vendored STIX-ID
+    # pylint plugin can see it (it doesn't follow **kwargs spreads).
+    stix_id = f"relationship--{_whisper_uuid5(edge_key)}"
+    extras: dict[str, Any] = {}
     description = (edge.get("properties") or {}).get("description")
     if description:
-        kwargs["description"] = description
-    return stix2.Relationship(**kwargs)
+        extras["description"] = description
+    return stix2.Relationship(
+        id=stix_id,
+        relationship_type=rel_type,
+        source_ref=source_stix.id,
+        target_ref=target_stix.id,
+        **extras,
+    )
 
 
 def build_bundle(

@@ -5,26 +5,21 @@ description = "OpenCTI connector that enriches indicators with Whisper graph dat
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Whisper Security" }]
-license = { text = "Proprietary" }
+license = { text = "Apache-2.0" }
 
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-src = ["src", "tests"]
+# Lint / format toolchain matches OpenCTI-Platform/connectors upstream
+# (ci-requirements.txt + lint.yml workflow): isort + black for formatting,
+# flake8 for basic-error linting, pylint with the vendored
+# `linter_stix_id_generator` plugin for STIX-ID dedup correctness.
 
-[tool.ruff.lint]
-select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "UP",  # pyupgrade
-]
-ignore = []
+[tool.black]
+line-length = 88
+target-version = ["py311"]
 
-[tool.ruff.lint.per-file-ignores]
-"src/main.py" = ["E402"]
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
