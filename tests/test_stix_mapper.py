@@ -1,5 +1,6 @@
 import pytest
 import stix2
+
 from src.connector.exceptions import StixMappingError
 from src.connector.stix_mapper import (
     ALLOWED_RELATIONSHIPS,
@@ -13,38 +14,52 @@ from src.connector.stix_mapper import (
 
 
 def test_map_ipv4():
-    obj = map_node({"id": "w-1", "type": "ipv4-addr", "properties": {"value": "1.2.3.4"}})
+    obj = map_node(
+        {"id": "w-1", "type": "ipv4-addr", "properties": {"value": "1.2.3.4"}}
+    )
     assert isinstance(obj, stix2.IPv4Address)
     assert obj.value == "1.2.3.4"
 
 
 def test_map_ipv6():
-    obj = map_node({"id": "w-2", "type": "ipv6-addr", "properties": {"value": "2001:db8::1"}})
+    obj = map_node(
+        {"id": "w-2", "type": "ipv6-addr", "properties": {"value": "2001:db8::1"}}
+    )
     assert isinstance(obj, stix2.IPv6Address)
     assert obj.value == "2001:db8::1"
 
 
 def test_map_domain():
-    obj = map_node({"id": "w-3", "type": "domain-name", "properties": {"value": "evil.test"}})
+    obj = map_node(
+        {"id": "w-3", "type": "domain-name", "properties": {"value": "evil.test"}}
+    )
     assert isinstance(obj, stix2.DomainName)
     assert obj.value == "evil.test"
 
 
 def test_map_url():
-    obj = map_node({"id": "w-4", "type": "url", "properties": {"value": "https://evil.test/p"}})
+    obj = map_node(
+        {"id": "w-4", "type": "url", "properties": {"value": "https://evil.test/p"}}
+    )
     assert isinstance(obj, stix2.URL)
     assert obj.value == "https://evil.test/p"
 
 
 def test_map_email():
-    obj = map_node({"id": "w-5", "type": "email-addr", "properties": {"value": "a@b.test"}})
+    obj = map_node(
+        {"id": "w-5", "type": "email-addr", "properties": {"value": "a@b.test"}}
+    )
     assert isinstance(obj, stix2.EmailAddress)
     assert obj.value == "a@b.test"
 
 
 def test_map_autonomous_system():
     obj = map_node(
-        {"id": "w-6", "type": "autonomous-system", "properties": {"number": 64500, "name": "TEST"}}
+        {
+            "id": "w-6",
+            "type": "autonomous-system",
+            "properties": {"number": 64500, "name": "TEST"},
+        }
     )
     assert isinstance(obj, stix2.AutonomousSystem)
     assert obj.number == 64500
@@ -52,7 +67,9 @@ def test_map_autonomous_system():
 
 
 def test_map_autonomous_system_number_coerced():
-    obj = map_node({"id": "w-7", "type": "autonomous-system", "properties": {"number": "64501"}})
+    obj = map_node(
+        {"id": "w-7", "type": "autonomous-system", "properties": {"number": "64501"}}
+    )
     assert obj.number == 64501
 
 
@@ -214,8 +231,12 @@ def test_map_node_handles_none_properties():
 
 
 def test_map_edge_builds_relationship():
-    src = map_node({"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}})
-    dst = map_node({"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}})
+    src = map_node(
+        {"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}}
+    )
+    dst = map_node(
+        {"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}}
+    )
     edge = {
         "id": "e1",
         "source_id": "n1",
@@ -232,8 +253,12 @@ def test_map_edge_builds_relationship():
 
 
 def test_map_edge_deterministic_id_without_explicit_id():
-    src = map_node({"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}})
-    dst = map_node({"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}})
+    src = map_node(
+        {"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}}
+    )
+    dst = map_node(
+        {"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}}
+    )
     edge = {"source_id": "n1", "target_id": "n2", "type": "resolves-to"}
     rel_a = map_edge(edge, src, dst)
     rel_b = map_edge(edge, src, dst)
@@ -241,15 +266,23 @@ def test_map_edge_deterministic_id_without_explicit_id():
 
 
 def test_map_edge_unknown_type_raises():
-    src = map_node({"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}})
-    dst = map_node({"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}})
+    src = map_node(
+        {"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}}
+    )
+    dst = map_node(
+        {"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}}
+    )
     with pytest.raises(StixMappingError, match="unsupported relationship type"):
         map_edge({"source_id": "n1", "target_id": "n2", "type": "made-up"}, src, dst)
 
 
 def test_map_edge_missing_fields_raises():
-    src = map_node({"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}})
-    dst = map_node({"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}})
+    src = map_node(
+        {"id": "n1", "type": "ipv4-addr", "properties": {"value": "1.1.1.1"}}
+    )
+    dst = map_node(
+        {"id": "n2", "type": "domain-name", "properties": {"value": "x.test"}}
+    )
     with pytest.raises(StixMappingError):
         map_edge({"target_id": "n2", "type": "resolves-to"}, src, dst)
 

@@ -7,20 +7,55 @@ on:
     branches: [main, develop]
 
 jobs:
-  lint:
-    name: Lint
+  format:
+    name: Ensure Formatting (isort + black)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Install ruff
-        run: pip install ruff==0.6.9
-      - name: Ruff check
-        run: ruff check src/ tests/
-      - name: Ruff format check
-        run: ruff format --check src/ tests/
+          python-version: "3.12"
+      - name: Install formatting tools
+        run: pip install isort==7.0.0 black==26.3.1
+      - name: Check isort
+        run: isort --profile black --line-length 88 --check-only --diff .
+      - name: Check black
+        run: black --check --diff .
+
+  flake8:
+    name: Base Linter (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install flake8
+        run: pip install "flake8>=7,<8"
+      - name: Run flake8
+        run: flake8 --ignore=E,W .
+
+  stix_id_linter:
+    name: STIX ID Linter (pylint + vendored plugin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install libmagic (pycti runtime dep — needed for source imports)
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+      - name: Install runtime + plugin deps
+        run: |
+          pip install -r requirements.txt
+          pip install pylint==3.3.1 astroid==3.3.5
+      - name: Run STIX ID pylint
+        run: |
+          cd shared/pylint_plugins/check_stix_plugin && \
+            PYTHONPATH=. pylint ../../../src ../../../tests \
+              --disable=all \
+              --enable=no_generated_id_stix,no-value-for-parameter,unused-import \
+              --load-plugins linter_stix_id_generator
 
   test:
     name: Tests
