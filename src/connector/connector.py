@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import stix2
 from pycti import OpenCTIConnectorHelper
 
+from src.connector.converter_to_stix import build_bundle, build_note
 from src.connector.exceptions import (
     StixMappingError,
     WhisperClientError,
@@ -21,7 +22,6 @@ from src.connector.queries import (
 )
 from src.connector.result_parser import collect_dropped_hostnames, parse_cypher_result
 from src.connector.settings import WhisperSettings
-from src.connector.stix_mapper import build_bundle, build_note
 from src.connector.whisper_client import WhisperClient
 
 _ASN_NAME_RE = re.compile(r"^AS(\d+)$", re.IGNORECASE)
@@ -85,7 +85,7 @@ class WhisperConnector:
     ) -> str | None:
         """Derive the deterministic STIX SCO id for the seed observable.
 
-        Mirrors what `stix_mapper`'s node mappers produce. Used by `build_note`
+        Mirrors what `converter_to_stix`'s node mappers produce. Used by `build_note`
         callers when they need to attach a Note to the seed without having
         the SCO object in hand.
         """
