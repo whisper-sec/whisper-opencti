@@ -61,11 +61,25 @@ The code is intentionally small and shallow. Six modules in [src/connector/](../
 
 ### 3.1 [src/main.py](../src/main.py) - entry point
 
-Tiny - about 30 lines. Builds the typed `ConfigConnector`, instantiates `OpenCTIConnectorHelper(config.load, playbook_compatible=True)`, hands both to `WhisperConnector(helper, config).run()`. Wrapped in `try/traceback.print_exc()/sys.exit(1)` so Docker reports the container as `Exited (1)` on any startup failure rather than silently looping. The `entrypoint.sh` shim execs `python -m src.main` so signals propagate cleanly under `docker stop`.
+Tiny - about 30 lines. Calls `load_yaml_config()` once for the optional `config.yml`, then `WhisperSettings.from_environment(yaml_config)` to build the typed settings (env-overrides-YAML), then `OpenCTIConnectorHelper(yaml_config, playbook_compatible=True)`, hands both to `WhisperConnector(helper, settings).run()`. Wrapped in `try/traceback.print_exc()/sys.exit(1)` so Docker reports the container as `Exited (1)` on any startup failure rather than silently looping. The `entrypoint.sh` shim execs `python -m src.main` so signals propagate cleanly under `docker stop`.
 
-### 3.2 [config.py](../src/connector/config.py) - config loader
+### 3.2 [settings.py](../src/connector/settings.py) - Pydantic-validated config
 
-Thin shim around `pycti.get_config_variable`. Wraps `WHISPER_API_URL`, `WHISPER_API_KEY`, and `WHISPER_MAX_TLP` (default `TLP:AMBER+STRICT`) into a single `ConfigConnector` instance with typed attribute access. Validation in `_validate()` rejects empty URL/key and TLP markings outside the allowed set. Pattern borrowed from upstream `shodan-internetdb`. A Pydantic `BaseSettings` migration is deferred to a follow-up so this PR stays focused on the v7 callback shape (#65).
+`WhisperSettings` is a `pydantic_settings.BaseSettings` subclass - matches the upstream OpenCTI-Platform/connectors convention (`virustotal`, `dnstwist`, etc.). Three fields:
+
+- `api_url: str` - required, `min_length=1`. Plain `str` because `WhisperClient.__init__` takes a plain string.
+- `api_key: str` - required, `min_length=1`. Not `SecretStr` - we already control logging at the boundary (`WhisperClient._headers` never logs the key) and `SecretStr.get_secret_value()` would litter every consumer.
+- `max_tlp: Literal["TLP:WHITE" | "TLP:CLEAR" | "TLP:GREEN" | "TLP:AMBER" | "TLP:AMBER+STRICT" | "TLP:RED"]` - Pydantic enforces the canonical set at construction; the old regex-style `_validate()` check is gone.
+
+`model_config = SettingsConfigDict(env_prefix="WHISPER_", frozen=True, extra="ignore", str_strip_whitespace=True)` gives us:
+
+- env vars are read at the `WHISPER_` prefix automatically (`WHISPER_API_URL`, `WHISPER_API_KEY`, `WHISPER_MAX_TLP`),
+- the settings instance is **immutable** after construction - catches "config drift" bugs in tests / refactors (a test can't accidentally lower `max_tlp` for everyone sharing the fixture),
+- unknown YAML keys are ignored rather than failing startup, so `whisper:` blocks can carry forward-compat keys this connector version doesn't understand yet.
+
+Construction goes through `WhisperSettings.from_environment(yaml_config)` in [main.py](../src/main.py). The classmethod composes the optional `whisper:` block from `config.yml` with environment variables, **env vars winning** - the same override semantics as the previous `pycti.get_config_variable` resolution. Tests build instances directly with keyword arguments (no YAML, no env) - the `make_config` fixture in `test_connector.py` is a small factory that overrides defaults like `max_tlp` for the TLP gate tests.
+
+`load_yaml_config(path=None)` is the small public helper that reads and parses `config.yml`. It returns the raw dict so the same value can be passed to both `OpenCTIConnectorHelper(...)` (which reads its own `OPENCTI__` / `CONNECTOR__` / `RABBITMQ__` keys out of it) and `WhisperSettings.from_environment(...)`.
 
 ### 3.3 [connector.py](../src/connector/connector.py) - orchestration
 
@@ -215,7 +229,7 @@ Two layers, env vars override YAML:
 - **Env vars** - primary. [.env.example](../.env.example) is the committed single-source-of-truth template (working dev defaults + production guidance in comments). `cp .env.example .env` then edit; the Makefile reads `.env` only.
 - **`config.yml`** - optional, loaded from the repo root if present. See [config.yml.sample](../config.yml.sample). Shape mirrors the env-var structure under `opencti:` / `connector:` / `whisper:` keys.
 
-Resolution happens in `ConfigConnector` (see §3.2) at startup time - `main.py` constructs it once, then hands the typed object to `WhisperConnector(helper, config)`. Tests inject a `MagicMock` config with the same attribute names, sidestepping pycti's resolver entirely.
+Resolution happens in `WhisperSettings.from_environment` (see §3.2) at startup time - `main.py` builds the settings once, then hands the frozen Pydantic object to `WhisperConnector(helper, settings)`. Tests construct `WhisperSettings` instances directly via the `make_config` factory fixture, bypassing env / YAML resolution entirely.
 
 Connector-side variables today:
 
@@ -225,7 +239,7 @@ Connector-side variables today:
 | `WHISPER_API_KEY` | `whisper.api_key` | - (required) | API key sent in the `X-API-Key` header. Never logged. |
 | `WHISPER_MAX_TLP` | `whisper.max_tlp` | `TLP:AMBER+STRICT` | TLP ceiling for the TLP gate in §3.3. Allowed values: `TLP:WHITE`, `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT`, `TLP:RED`. Set to `TLP:RED` to disable the gate (effectively). |
 
-`OPENCTI_*` and `CONNECTOR_*` env vars are read by the helper itself; they don't flow through `ConfigConnector`. See [README.md §Configuration](../README.md#configuration) for the full list.
+`OPENCTI_*` and `CONNECTOR_*` env vars are read by the helper itself out of the same YAML dict; they don't flow through `WhisperSettings`. See [README.md §Configuration](../README.md#configuration) for the full list.
 
 ## 6. Deployment topology
 
