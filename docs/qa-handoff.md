@@ -80,6 +80,9 @@ item) and the user-visible state in the UI.
 | **TC-15** | Threat intel Note | Enrich `Domain-Name malware-traffic-analysis.net` | **Analyses → Notes** contains a `Whisper threat intelligence` note with `Threat assessment: MEDIUM (score 3.169)`, ISO-8601 first/last seen, and a `Listed in 2 source(s)` block naming the feeds. |
 | **TC-16** | IP network context | Enrich `IPv4-Addr 8.8.8.8` | **Knowledge** shows a new `related-to` row pointing at an `Autonomous-System` SCO (`AS15169 - GOOGLE - Google LLC`) tagged `description="ANNOUNCED_BY"`. **Analyses → Notes** contains a `Whisper network context` note with announced prefix `8.8.8.0/24`, BGP flags, and `ANNOUNCED_PREFIX threat: LOW (score 1)`. |
 | **TC-17** | Re-enrich Note idempotency | Run TC-15 twice in a row | Same Note `standard_id` both times. OpenCTI does NOT create a duplicate Note. |
+| **TC-18** | TLP ceiling enforced | With default `WHISPER_MAX_TLP=TLP:AMBER+STRICT`, create `IPv4-Addr 203.0.113.42` with a `TLP:RED` `objectMarking`, enrich | Connector logs `WARNING: Refusing to enrich - TLP exceeds whisper.max_tlp`. Status string is `observable TLP marking 'TLP:RED' exceeds whisper.max_tlp='TLP:AMBER+STRICT'`. No Cypher query fired against Whisper. No bundle sent. |
+| **TC-19** | TLP ceiling raised | Set `WHISPER_MAX_TLP=TLP:RED`, restart, re-enrich the TC-18 observable | Enrichment proceeds normally - bundle ships. Confirms the ceiling is configurable. |
+| **TC-20** | Playbook chain pass-through | In a playbook that routes a `Url` observable (out of scope) through Whisper enrichment | Original `stix_objects` bundle ships back unchanged (status string `playbook pass-through: forwarded N STIX object(s)`). Downstream playbook nodes see the entity. No Cypher query fired. |
 
 ## 4. Known limitations / non-goals for the MVP
 
@@ -170,7 +173,7 @@ When filing, please include:
 
 QA acceptance criteria for closing the milestone:
 
-- [ ] TC-01 through TC-17 all pass on a fresh `make dev-up`.
+- [ ] TC-01 through TC-20 all pass on a fresh `make dev-up`.
 - [ ] All three scenarios in [docs/scenarios/](./scenarios/) reproduce against
   the live Whisper graph (results will differ from the captured examples;
   shape and types should match).
