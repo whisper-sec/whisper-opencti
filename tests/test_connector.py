@@ -10,8 +10,28 @@ from src.connector.whisper_client import CypherResult, WhisperClient
 
 @pytest.fixture
 def helper():
+    """v7 helper: ``stix2_create_bundle`` is the only helper API we use
+    on the send path; we mock it as identity-ish so test bodies can read
+    the serialized bundle from ``send_stix2_bundle.call_args``.
+    """
     h = MagicMock()
-    h.api.stix_cyber_observable.read.return_value = None
+
+    # Identity-ish: pass through a serialized JSON form of the objects
+    # list so tests can json.loads the call_args and inspect the bundle.
+    # Handle both stix2 objects (which have .serialize()) and raw dicts
+    # (e.g. the playbook-passthrough path forwards the worker-supplied
+    # stix_objects list verbatim).
+    def _create_bundle(objects):
+        return json.dumps(
+            {
+                "objects": [
+                    json.loads(o.serialize()) if hasattr(o, "serialize") else o
+                    for o in objects
+                ]
+            }
+        )
+
+    h.stix2_create_bundle.side_effect = _create_bundle
     return h
 
 
@@ -21,47 +41,82 @@ def client():
 
 
 @pytest.fixture
-def connector(helper, client):
-    return WhisperConnector(helper=helper, client=client)
+def config():
+    """ConfigConnector mock - only ``whisper_max_tlp`` is read directly
+    by ``_extract_and_check_markings``; the URL/key are unused because
+    we inject the ``client`` fixture. Default ``TLP:RED`` keeps every
+    test observable below the ceiling unless a test overrides.
+    """
+    c = MagicMock()
+    c.whisper_api_url = "https://api.whisper.test"
+    c.whisper_api_key = "test-key"
+    c.whisper_max_tlp = "TLP:RED"
+    return c
 
 
-def test_process_message_no_entity_id_returns_status(connector, helper):
+@pytest.fixture
+def connector(helper, config, client):
+    return WhisperConnector(helper=helper, config=config, client=client)
+
+
+def _v7_payload(
+    observable: dict,
+    *,
+    event_type: str = "create",
+    stix_objects: list | None = None,
+) -> dict:
+    """Build a v7 ``_process_message`` data dict.
+
+    The v7 internal-enrichment callback receives the observable
+    directly (no ``helper.api.stix_cyber_observable.read`` round-trip),
+    plus a STIX-form view and the bundle's ``stix_objects`` for
+    playbook pass-through. Default ``event_type="create"`` simulates a
+    real-time enrichment request; pass ``event_type=None`` to simulate
+    a playbook chain.
+    """
+    payload = {
+        "enrichment_entity": observable,
+        "stix_entity": observable,
+        "stix_objects": stix_objects or [],
+    }
+    if event_type is not None:
+        payload["event_type"] = event_type
+    return payload
+
+
+def test_process_message_no_enrichment_entity_returns_status(connector, helper):
+    # v7 callback shape: the worker hands us the entity directly via
+    # data["enrichment_entity"]. Empty payload is an upstream-side bug
+    # - return a clear status, don't try to enrich.
     result = connector._process_message({})
-    assert "missing entity_id" in result
-    helper.api.stix_cyber_observable.read.assert_not_called()
-
-
-def test_process_message_observable_not_found(connector, helper):
-    helper.api.stix_cyber_observable.read.return_value = None
-    result = connector._process_message({"entity_id": "ipv4--abc"})
-    assert "not found" in result
+    assert "missing enrichment_entity" in result
     helper.send_stix2_bundle.assert_not_called()
 
 
 def test_process_message_unsupported_entity_type(connector, helper, client):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "url--x",
         "entity_type": "Url",
         "value": "https://example.test/",
     }
-    result = connector._process_message({"entity_id": "url--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "not supported" in result
     client.execute_cypher.assert_not_called()
     helper.send_stix2_bundle.assert_not_called()
 
 
 def test_process_message_observable_without_value(connector, helper):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
     }
-    result = connector._process_message({"entity_id": "ipv4--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "no value to enrich" in result
     helper.send_stix2_bundle.assert_not_called()
 
 
 def test_process_message_no_whisper_data(connector, helper, client):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "1.2.3.4",
@@ -69,7 +124,7 @@ def test_process_message_no_whisper_data(connector, helper, client):
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    result = connector._process_message({"entity_id": "ipv4--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "No Whisper data" in result
     helper.send_stix2_bundle.assert_not_called()
 
@@ -77,7 +132,7 @@ def test_process_message_no_whisper_data(connector, helper, client):
 def test_process_message_enriches_ipv4_with_resolves_to_hostname(
     connector, helper, client
 ):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -94,7 +149,7 @@ def test_process_message_enriches_ipv4_with_resolves_to_hostname(
         statistics={"rowCount": 1, "executionTimeMs": 3},
     )
 
-    result = connector._process_message({"entity_id": "ipv4--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "Enriched 8.8.8.8" in result
 
     helper.send_stix2_bundle.assert_called_once()
@@ -113,7 +168,7 @@ def test_process_message_enriches_ipv4_with_resolves_to_hostname(
 def test_process_message_inlines_value_and_limit_into_query(connector, helper, client):
     # Whisper rejects parameterised queries entirely - both $value and $limit
     # are substituted client-side as Cypher literals.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -121,7 +176,7 @@ def test_process_message_inlines_value_and_limit_into_query(connector, helper, c
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
     args, _kwargs = client.execute_cypher.call_args
     query = args[0]
     assert "$value" not in query
@@ -141,7 +196,7 @@ def test_process_message_returns_no_mappable_rels_when_only_seed_remains(
     # Sending a bundle with just the seed adds no new info to OpenCTI and
     # produces a misleading green status. The correct outcome is a clear
     # "No mappable Whisper relationships for X" status with no bundle sent.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -158,7 +213,7 @@ def test_process_message_returns_no_mappable_rels_when_only_seed_remains(
         statistics={},
     )
 
-    result = connector._process_message({"entity_id": "ipv4--x"})
+    result = connector._process_message(_v7_payload(observable))
 
     assert result == "No mappable Whisper relationships for 8.8.8.8"
     helper.send_stix2_bundle.assert_not_called()
@@ -167,14 +222,14 @@ def test_process_message_returns_no_mappable_rels_when_only_seed_remains(
 def test_process_message_whisper_transport_error_propagates_and_logs(
     connector, helper, client
 ):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "1.2.3.4",
     }
     client.execute_cypher.side_effect = WhisperTransportError("connection refused")
     with pytest.raises(WhisperTransportError):
-        connector._process_message({"entity_id": "ipv4--x"})
+        connector._process_message(_v7_payload(observable))
     helper.send_stix2_bundle.assert_not_called()
     helper.connector_logger.error.assert_called()
 
@@ -183,7 +238,7 @@ def test_process_message_accepts_observable_value_or_value_field(
     connector, helper, client
 ):
     # pycti returns different field names across versions - handle both.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",  # not observable_value
@@ -191,7 +246,7 @@ def test_process_message_accepts_observable_value_or_value_field(
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    result = connector._process_message({"entity_id": "domain-name--x"})
+    result = connector._process_message(_v7_payload(observable))
     # Should have inlined the "value" field's value as a Cypher literal.
     assert "No Whisper data for example.test" in result
     # Domain-Name seeds now trigger LINKS_TO supplementary queries (issue
@@ -209,7 +264,7 @@ def test_process_message_enriches_autonomous_system_via_asn_anchor(
     # `number` field (OpenCTI's `observable_value` for autonomous-system
     # is the AS *name* like "Google LLC", not the canonical "AS<number>"
     # form Whisper uses), then issue an ASN-anchored Cypher query.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "autonomous-system--x",
         "entity_type": "Autonomous-System",
         "observable_value": "Google LLC",  # human-readable name
@@ -228,7 +283,7 @@ def test_process_message_enriches_autonomous_system_via_asn_anchor(
         statistics={"rowCount": 1, "executionTimeMs": 5},
     )
 
-    result = connector._process_message({"entity_id": "autonomous-system--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "Enriched AS15169" in result
 
     # Cypher template fired with the ASN anchor + AS-number-derived value,
@@ -253,7 +308,7 @@ def test_process_message_autonomous_system_without_number_falls_back(
     # observable_value / value carries - even if it likely won't match a
     # Whisper ASN node. Better to issue the query and return "No Whisper
     # data" than crash.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "autonomous-system--x",
         "entity_type": "Autonomous-System",
         "observable_value": "Some-Network",
@@ -261,7 +316,7 @@ def test_process_message_autonomous_system_without_number_falls_back(
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    result = connector._process_message({"entity_id": "autonomous-system--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "No Whisper data for Some-Network" in result
 
 
@@ -313,7 +368,7 @@ def test_links_to_supplementary_queries_fire_for_domain_name_seed(
     # threat-context query also fires for Domain-Name. This is the wiring
     # test for the supplementary LINKS_TO pass - match by query shape so
     # the test stays resilient to other supplementary queries being added.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -325,7 +380,7 @@ def test_links_to_supplementary_queries_fire_for_domain_name_seed(
         outbound_count=0,
         inbound_count=0,
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     queries = [c.args[0] for c in client.execute_cypher.call_args_list]
     links_to_queries = [q for q in queries if ":LINKS_TO" in q]
@@ -361,7 +416,7 @@ def test_links_to_outbound_edge_tagged_and_oriented_seed_to_neighbour(
     # (source) and neighbour in `m` (target) - parser default keeps that
     # orientation. The edge `description` must say "LINKS_TO outbound" so
     # analysts can distinguish direction in OpenCTI.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -379,7 +434,7 @@ def test_links_to_outbound_edge_tagged_and_oriented_seed_to_neighbour(
         outbound_count=1,
         inbound_count=0,
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     helper.send_stix2_bundle.assert_called_once()
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
@@ -397,7 +452,7 @@ def test_links_to_inbound_edge_source_target_swapped(connector, helper, client):
     # gives us (seed → neighbour). The connector must swap source/target
     # before emitting so the STIX relationship correctly reads
     # neighbour → seed.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -415,7 +470,7 @@ def test_links_to_inbound_edge_source_target_swapped(connector, helper, client):
         outbound_count=0,
         inbound_count=1,
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     rels = [o for o in bundle["objects"] if o["type"] == "relationship"]
@@ -435,7 +490,7 @@ def test_links_to_cap_overflow_emits_note_attached_to_seed(connector, helper, cl
     # direction, the connector must emit a STIX Note attached to the seed
     # so the analyst sees "showing first 25" instead of being misled into
     # thinking 25 is the full picture. Both directions overflow here.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -453,7 +508,7 @@ def test_links_to_cap_overflow_emits_note_attached_to_seed(connector, helper, cl
         outbound_count=42,
         inbound_count=12_800_000,
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     notes = [o for o in bundle["objects"] if o["type"] == "note"]
@@ -475,7 +530,7 @@ def test_links_to_cap_overflow_emits_note_attached_to_seed(connector, helper, cl
 def test_links_to_no_overflow_omits_note(connector, helper, client):
     # Counts at-or-below the cap should NOT generate a Note. Only emit the
     # overflow notice when it's actually informative.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -493,7 +548,7 @@ def test_links_to_no_overflow_omits_note(connector, helper, client):
         outbound_count=3,
         inbound_count=25,  # exactly at cap is fine - not overflowing
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     assert not any(o["type"] == "note" for o in bundle["objects"])
@@ -515,7 +570,7 @@ def test_links_to_supplementary_skipped_for_non_domain_seeds(connector, helper, 
         ),
     ):
         client.reset_mock()
-        helper.api.stix_cyber_observable.read.return_value = {
+        observable = {
             "id": entity_id,
             "entity_type": entity_type,
             **extra,
@@ -523,7 +578,7 @@ def test_links_to_supplementary_skipped_for_non_domain_seeds(connector, helper, 
         client.execute_cypher.return_value = CypherResult(
             columns=["n", "r", "m"], rows=[], statistics={}
         )
-        connector._process_message({"entity_id": entity_id})
+        connector._process_message(_v7_payload(observable))
         queries = [c.args[0] for c in client.execute_cypher.call_args_list]
         # Zero directed/count LINKS_TO queries for non-Domain-Name seeds.
         for q in queries:
@@ -543,7 +598,7 @@ def test_links_to_supplementary_failure_does_not_fail_enrichment(
     # delivered - we don't punish the seed because of a flaky follow-up.
     from src.connector.exceptions import WhisperTransportError
 
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -568,7 +623,7 @@ def test_links_to_supplementary_failure_does_not_fail_enrichment(
 
     client.execute_cypher.side_effect = _flaky
 
-    result = connector._process_message({"entity_id": "domain-name--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "Enriched example.test" in result
     helper.send_stix2_bundle.assert_called_once()
     helper.connector_logger.error.assert_called()
@@ -609,7 +664,7 @@ def _seed_main_row(label="HOSTNAME", name="malware-traffic-analysis.net"):
 def test_threat_context_emits_note_with_score_level_flags_and_feeds(
     connector, helper, client
 ):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "malware-traffic-analysis.net",
@@ -645,7 +700,7 @@ def test_threat_context_emits_note_with_score_level_flags_and_feeds(
             },
         ],
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     threat_notes = [
@@ -682,7 +737,7 @@ def test_threat_context_emits_note_with_score_level_flags_and_feeds(
 def test_threat_context_omits_note_when_no_threat_data(connector, helper, client):
     # Whisper has the seed but no threat properties / no feed listings.
     # Emitting a Note that says "no threat data" would be noise - skip it.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "boring.test",
@@ -701,7 +756,7 @@ def test_threat_context_omits_note_when_no_threat_data(connector, helper, client
             }
         ],
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     assert not any(
@@ -717,7 +772,7 @@ def test_threat_context_note_emitted_with_score_only_no_feeds(
     # Seed has a score and level but isn't on any FEED_SOURCE - still
     # produces a Note. The Note is the only analyst-visible breadcrumb that
     # Whisper has any threat opinion on this seed.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "203.0.113.42",
@@ -738,7 +793,7 @@ def test_threat_context_note_emitted_with_score_only_no_feeds(
             }
         ],
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     note = next(
@@ -758,7 +813,7 @@ def test_threat_context_query_failure_does_not_fail_enrichment(
     # path.
     from src.connector.exceptions import WhisperTransportError
 
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -782,7 +837,7 @@ def test_threat_context_query_failure_does_not_fail_enrichment(
 
     client.execute_cypher.side_effect = _flaky
 
-    result = connector._process_message({"entity_id": "ipv4--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "Enriched 8.8.8.8" in result
     helper.send_stix2_bundle.assert_called_once()
     helper.connector_logger.error.assert_called()
@@ -797,7 +852,7 @@ def test_threat_context_query_failure_does_not_fail_enrichment(
 def test_threat_context_skipped_for_autonomous_system_seed(connector, helper, client):
     # ASN nodes don't carry threat properties in Whisper's schema, so no
     # threat-context query should fire for Autonomous-System seeds.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "autonomous-system--x",
         "entity_type": "Autonomous-System",
         "observable_value": "Google LLC",
@@ -806,7 +861,7 @@ def test_threat_context_skipped_for_autonomous_system_seed(connector, helper, cl
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    connector._process_message({"entity_id": "autonomous-system--x"})
+    connector._process_message(_v7_payload(observable))
 
     queries = [c.args[0] for c in client.execute_cypher.call_args_list]
     for q in queries:
@@ -822,7 +877,7 @@ def test_threat_context_note_ships_even_when_no_mappable_relationships(
     # label (PREFIX). Without Phase B that's "No mappable Whisper
     # relationships" - but the threat Note IS meaningful, so the bundle
     # ships and the status is the regular "Enriched" line.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "192.0.2.7",
@@ -844,9 +899,7 @@ def test_threat_context_note_ships_even_when_no_mappable_relationships(
             }
         ],
     )
-    result = connector._process_message(
-        {"entity_id": "192.0.2.7"} | {"entity_id": "ipv4--x"}
-    )
+    result = connector._process_message(_v7_payload(observable))
     assert "Enriched 192.0.2.7" in result
     helper.send_stix2_bundle.assert_called_once()
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
@@ -941,7 +994,7 @@ def _network_row(
 
 
 def test_network_context_emits_as_sco_edge_and_note(connector, helper, client):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -950,7 +1003,7 @@ def test_network_context_emits_as_sco_edge_and_note(connector, helper, client):
         main_rows=[_ip_seed_row()],
         network_rows=[_network_row()],
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
 
@@ -984,7 +1037,7 @@ def test_network_context_emits_as_sco_edge_and_note(connector, helper, client):
 def test_network_context_falls_back_to_as_number_label_without_has_name(
     connector, helper, client
 ):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "203.0.113.5",
@@ -1003,7 +1056,7 @@ def test_network_context_falls_back_to_as_number_label_without_has_name(
             )
         ],
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     as_sco = next(o for o in bundle["objects"] if o["type"] == "autonomous-system")
@@ -1025,7 +1078,7 @@ def test_network_context_falls_back_to_as_number_label_without_has_name(
 
 
 def test_network_context_handles_moas_multiple_announcers(connector, helper, client):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "1.2.3.4",
@@ -1054,7 +1107,7 @@ def test_network_context_handles_moas_multiple_announcers(connector, helper, cli
             ),
         ],
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     as_numbers = sorted(
@@ -1084,7 +1137,7 @@ def test_network_context_dedups_repeated_asn_rows(connector, helper, client):
     # MATCHes cross-join (e.g. the IP has multiple BELONGS_TO PREFIXes).
     # The connector must dedup by ASN nodeId - otherwise we get duplicate
     # AS SCOs and edges.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -1096,7 +1149,7 @@ def test_network_context_dedups_repeated_asn_rows(connector, helper, client):
             _network_row(static_prefix="8.8.0.0/16"),  # same ASN, different PREFIX
         ],
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     as_scos = [o for o in bundle["objects"] if o["type"] == "autonomous-system"]
@@ -1110,7 +1163,7 @@ def test_network_context_dedups_repeated_asn_rows(connector, helper, client):
 
 
 def test_network_context_skipped_for_domain_seed(connector, helper, client):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
@@ -1118,7 +1171,7 @@ def test_network_context_skipped_for_domain_seed(connector, helper, client):
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     queries = [c.args[0] for c in client.execute_cypher.call_args_list]
     for q in queries:
@@ -1128,7 +1181,7 @@ def test_network_context_skipped_for_domain_seed(connector, helper, client):
 
 
 def test_network_context_skipped_for_asn_seed(connector, helper, client):
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "autonomous-system--x",
         "entity_type": "Autonomous-System",
         "observable_value": "Google LLC",
@@ -1137,7 +1190,7 @@ def test_network_context_skipped_for_asn_seed(connector, helper, client):
     client.execute_cypher.return_value = CypherResult(
         columns=["n", "r", "m"], rows=[], statistics={}
     )
-    connector._process_message({"entity_id": "autonomous-system--x"})
+    connector._process_message(_v7_payload(observable))
 
     queries = [c.args[0] for c in client.execute_cypher.call_args_list]
     for q in queries:
@@ -1151,7 +1204,7 @@ def test_network_context_query_failure_does_not_fail_enrichment(
 ):
     from src.connector.exceptions import WhisperTransportError
 
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -1169,7 +1222,7 @@ def test_network_context_query_failure_does_not_fail_enrichment(
 
     client.execute_cypher.side_effect = _flaky
 
-    result = connector._process_message({"entity_id": "ipv4--x"})
+    result = connector._process_message(_v7_payload(observable))
     assert "Enriched 8.8.8.8" in result
     helper.send_stix2_bundle.assert_called_once()
     helper.connector_logger.error.assert_called()
@@ -1183,7 +1236,7 @@ def test_network_context_omits_static_allocation_when_same_as_announced(
     # Issue #48 follow-up sanity: if Whisper returns a static PREFIX that
     # already matches the ANNOUNCED_PREFIX, the Note shouldn't repeat it
     # under a separate "Static allocation" line - that's pure noise.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
         "observable_value": "8.8.8.8",
@@ -1192,7 +1245,7 @@ def test_network_context_omits_static_allocation_when_same_as_announced(
         main_rows=[_ip_seed_row()],
         network_rows=[_network_row(static_prefix="8.8.8.0/24")],  # same as announced
     )
-    connector._process_message({"entity_id": "ipv4--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     note = next(
@@ -1210,7 +1263,7 @@ def test_dropped_hostnames_note_emitted_with_seed_attachment(connector, helper, 
     # Main query has a NAMESERVER_FOR edge to an SPF-style invalid HOSTNAME.
     # The parser drops it (per #47); the connector now ALSO surfaces it
     # via a Note attached to the seed.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "telus.ca",
@@ -1239,7 +1292,7 @@ def test_dropped_hostnames_note_emitted_with_seed_attachment(connector, helper, 
         ],
         statistics={"executionTimeMs": 2},
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     notes = [
@@ -1267,7 +1320,7 @@ def test_dropped_hostnames_note_skipped_when_nothing_dropped(connector, helper, 
     # Clean enrichment with no underscore-bearing neighbours must not
     # produce a dropped-records Note - bundle shape unchanged from
     # pre-#51 behaviour.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "telus.ca",
@@ -1283,7 +1336,7 @@ def test_dropped_hostnames_note_skipped_when_nothing_dropped(connector, helper, 
         ],
         statistics={},
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     assert not any(
@@ -1299,7 +1352,7 @@ def test_dropped_hostnames_note_dedupes_same_name_across_rows(
     # The same invalid HOSTNAME may appear in multiple rows (e.g. once
     # via NAMESERVER_FOR, once via MAIL_FOR). The Note must list it
     # exactly once - the first edge type wins so the content is stable.
-    helper.api.stix_cyber_observable.read.return_value = {
+    observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.com",
@@ -1320,7 +1373,7 @@ def test_dropped_hostnames_note_dedupes_same_name_across_rows(
         ],
         statistics={},
     )
-    connector._process_message({"entity_id": "domain-name--x"})
+    connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     note = next(
@@ -1331,3 +1384,132 @@ def test_dropped_hostnames_note_dedupes_same_name_across_rows(
     )
     # The dropped name must appear exactly once in the body.
     assert note["content"].count("_spf.example.com") == 1
+
+
+# --- v7 callback shape: TLP marking check (issue #65) ----------------------
+
+
+def test_tlp_check_refuses_when_marking_exceeds_max_tlp(connector, helper, config):
+    # Default fixture sets whisper_max_tlp=TLP:RED - bring the ceiling
+    # down to TLP:AMBER and present a TLP:RED observable. The connector
+    # must refuse to enrich, log a warning, and NOT call Whisper.
+    config.whisper_max_tlp = "TLP:AMBER"
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+        "objectMarking": [{"definition_type": "TLP", "definition": "TLP:RED"}],
+    }
+    result = connector._process_message(_v7_payload(observable))
+    assert "exceeds whisper.max_tlp" in result
+    helper.send_stix2_bundle.assert_not_called()
+    helper.connector_logger.warning.assert_called()
+
+
+def test_tlp_check_allows_marking_at_or_below_max_tlp(connector, client):
+    # An AMBER observable under a TLP:RED ceiling must proceed to the
+    # normal enrichment flow (cypher fired, bundle sent / not sent based
+    # on whether Whisper has data).
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+        "objectMarking": [{"definition_type": "TLP", "definition": "TLP:AMBER"}],
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"], rows=[], statistics={}
+    )
+    result = connector._process_message(_v7_payload(observable))
+    assert "No Whisper data" in result  # ran the query, got nothing
+    client.execute_cypher.assert_called()
+
+
+def test_tlp_check_ignores_non_tlp_markings(connector, client):
+    # Other marking definition types (e.g. statements, PAP) shouldn't
+    # trigger the TLP-ceiling check - only `definition_type == "TLP"`.
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+        "objectMarking": [
+            {"definition_type": "statement", "definition": "Some statement"},
+        ],
+    }
+    client.execute_cypher.return_value = CypherResult(
+        columns=["n", "r", "m"], rows=[], statistics={}
+    )
+    result = connector._process_message(_v7_payload(observable))
+    # Got through the TLP gate to the enrichment path.
+    assert "No Whisper data" in result
+    client.execute_cypher.assert_called()
+
+
+# --- v7 callback shape: playbook pass-through (issue #65) -----------------
+
+
+def test_unsupported_entity_with_event_type_returns_not_supported(
+    connector, helper, client
+):
+    # Real-time event for an out-of-scope entity: return the clear
+    # "not supported" status; do NOT ship a bundle, do NOT call Whisper.
+    observable = {
+        "id": "url--x",
+        "entity_type": "Url",
+        "value": "https://example.test/",
+    }
+    result = connector._process_message(_v7_payload(observable, event_type="create"))
+    assert "not supported" in result
+    client.execute_cypher.assert_not_called()
+    helper.send_stix2_bundle.assert_not_called()
+
+
+def test_unsupported_entity_in_playbook_chain_passes_bundle_through(
+    connector, helper, client
+):
+    # No event_type means the worker handed this to us via a playbook
+    # chain. The v7 playbook_compatible=True contract: out-of-scope
+    # entities still get their original stix_objects bundle shipped
+    # downstream, unchanged. Critical so playbook chains don't lose
+    # data when they pass through this connector.
+    observable = {
+        "id": "url--x",
+        "entity_type": "Url",
+        "value": "https://example.test/",
+    }
+    playbook_objects = [
+        {
+            "type": "url",
+            "id": "url--00000000-0000-0000-0000-000000000001",
+            "value": "https://example.test/",
+        },
+        {
+            "type": "marking-definition",
+            "id": "marking-definition--00000000-0000-0000-0000-000000000002",
+        },
+    ]
+    result = connector._process_message(
+        _v7_payload(observable, event_type=None, stix_objects=playbook_objects)
+    )
+    assert "playbook pass-through" in result
+    client.execute_cypher.assert_not_called()
+    helper.stix2_create_bundle.assert_called_once_with(playbook_objects)
+    helper.send_stix2_bundle.assert_called_once()
+
+
+def test_playbook_chain_with_no_stix_objects_returns_status_no_send(
+    connector, helper, client
+):
+    # Defensive: playbook chain delivered an out-of-scope entity with no
+    # supporting stix_objects. We have nothing to forward, so don't call
+    # send_stix2_bundle - just return a status string.
+    observable = {
+        "id": "url--x",
+        "entity_type": "Url",
+        "value": "https://example.test/",
+    }
+    result = connector._process_message(
+        _v7_payload(observable, event_type=None, stix_objects=[])
+    )
+    assert "playbook pass-through" in result
+    assert "no stix_objects" in result
+    helper.send_stix2_bundle.assert_not_called()
