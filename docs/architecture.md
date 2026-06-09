@@ -151,7 +151,7 @@ Two translation tables encode the schema mapping:
 
 Output is `(nodes, edges)` where each is a list of normalized dicts — the public contract with §3.6.
 
-### 3.7 [stix_mapper.py](../src/connector/stix_mapper.py) — normalized → STIX 2.1
+### 3.7 [converter_to_stix.py](../src/connector/converter_to_stix.py) — normalized → STIX 2.1
 
 Pure functions. No I/O, no logging beyond errors. `build_bundle(nodes, edges) -> stix2.Bundle` is the public entry point.
 
@@ -259,7 +259,7 @@ Five test files in [tests/](../tests/), 76 cases total, all unit tests. No live 
 | [test_queries.py](../tests/test_queries.py) | Template substitution, escaping, unsupported-type fallthrough | Pure function calls |
 | [test_whisper_client.py](../tests/test_whisper_client.py) | HTTP boundary: auth errors, retries, transport errors, JSON parsing | `responses` library mocks |
 | [test_result_parser.py](../tests/test_result_parser.py) | Cypher row → normalized graph, including direction orientation and dropped-label behavior | Hand-built `CypherResult` fixtures |
-| [test_stix_mapper.py](../tests/test_stix_mapper.py) | Node/edge mapping, idempotency (same input → same IDs), error paths | Construct normalized dicts, assert STIX shape |
+| [test_converter_to_stix.py](../tests/test_converter_to_stix.py) | Node/edge mapping, idempotency (same input → same IDs), error paths | Construct normalized dicts, assert STIX shape |
 | [test_connector.py](../tests/test_connector.py) | End-to-end callback with helper + client mocked | Injects fake `OpenCTIConnectorHelper` and `WhisperClient` |
 
 **Deliberate gap:** no integration test against the live Whisper API in CI. The dev stack + QA manual matrix in [docs/qa-handoff.md](qa-handoff.md) is the only true end-to-end check today.
