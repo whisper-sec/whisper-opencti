@@ -486,7 +486,7 @@ and current status.
 │   ├── whisper_client.py   # HTTP client with retries (5xx + 429)
 │   ├── queries.py          # Cypher templates per entity type
 │   ├── result_parser.py    # Whisper rows → normalized nodes/edges
-│   ├── stix_mapper.py      # Normalized → STIX 2.1 bundle
+│   ├── converter_to_stix.py # Normalized → STIX 2.1 bundle
 │   └── exceptions.py
 ├── tests/                  # pytest suite
 ├── Dockerfile
