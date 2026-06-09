@@ -5,6 +5,7 @@ import pytest
 
 from src.connector.connector import WhisperConnector
 from src.connector.exceptions import WhisperTransportError
+from src.connector.settings import WhisperSettings
 from src.connector.whisper_client import CypherResult, WhisperClient
 
 
@@ -41,17 +42,27 @@ def client():
 
 
 @pytest.fixture
-def config():
-    """ConfigConnector mock — only ``whisper_max_tlp`` is read directly
-    by ``_extract_and_check_markings``; the URL/key are unused because
-    we inject the ``client`` fixture. Default ``TLP:RED`` keeps every
-    test observable below the ceiling unless a test overrides.
+def make_config():
+    """Factory for ``WhisperSettings`` instances. Default ``max_tlp=TLP:RED``
+    keeps every test observable below the ceiling unless a test overrides.
+    Override via ``make_config(max_tlp="TLP:AMBER")`` etc. — the settings
+    object is frozen, so direct mutation isn't possible.
     """
-    c = MagicMock()
-    c.whisper_api_url = "https://api.whisper.test"
-    c.whisper_api_key = "test-key"
-    c.whisper_max_tlp = "TLP:RED"
-    return c
+
+    def _factory(**overrides) -> WhisperSettings:
+        defaults: dict = {
+            "api_url": "https://api.whisper.test",
+            "api_key": "test-key",
+            "max_tlp": "TLP:RED",
+        }
+        return WhisperSettings(**{**defaults, **overrides})
+
+    return _factory
+
+
+@pytest.fixture
+def config(make_config):
+    return make_config()
 
 
 @pytest.fixture
@@ -1389,11 +1400,13 @@ def test_dropped_hostnames_note_dedupes_same_name_across_rows(
 # --- v7 callback shape: TLP marking check (issue #65) ----------------------
 
 
-def test_tlp_check_refuses_when_marking_exceeds_max_tlp(connector, helper, config):
-    # Default fixture sets whisper_max_tlp=TLP:RED — bring the ceiling
-    # down to TLP:AMBER and present a TLP:RED observable. The connector
-    # must refuse to enrich, log a warning, and NOT call Whisper.
-    config.whisper_max_tlp = "TLP:AMBER"
+def test_tlp_check_refuses_when_marking_exceeds_max_tlp(helper, client, make_config):
+    # WhisperSettings is frozen, so we can't mutate the default fixture's
+    # max_tlp — build a fresh instance via the make_config factory with
+    # the lowered TLP ceiling, then feed it a TLP:RED observable. The
+    # connector must refuse to enrich, log a warning, and NOT call Whisper.
+    config = make_config(max_tlp="TLP:AMBER")
+    connector = WhisperConnector(helper=helper, config=config, client=client)
     observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
