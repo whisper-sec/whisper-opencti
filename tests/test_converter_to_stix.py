@@ -1,14 +1,14 @@
 import pytest
 import stix2
 
-from src.connector.exceptions import StixMappingError
-from src.connector.stix_mapper import (
+from src.connector.converter_to_stix import (
     ALLOWED_RELATIONSHIPS,
     NODE_MAPPERS,
     build_bundle,
     map_edge,
     map_node,
 )
+from src.connector.exceptions import StixMappingError
 
 # --- SCO mappers -----------------------------------------------------------
 
