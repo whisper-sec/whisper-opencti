@@ -315,7 +315,9 @@ def test_parse_drops_hostname_with_other_invalid_chars():
 def test_parse_keeps_valid_punycode_idn_hostname():
     # RFC-valid domain forms that include punycode IDN labels should pass
     # the validation - e.g. `xn--example.com`.
-    rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "xn--bcher-kva.example"}}]
+    rows = [
+        {"n": {"nodeId": "1", "label": "HOSTNAME", "name": "xn--bcher-kva.example"}}
+    ]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert len(nodes) == 1
     assert nodes[0]["type"] == "domain-name"
@@ -351,7 +353,9 @@ def test_collect_dropped_hostnames_picks_up_underscored_subdomain():
         }
     ]
     dropped = collect_dropped_hostnames(_result(rows))
-    assert dropped == [{"name": "_spf_telus_com.nssi.telus.com", "edge_type": "NAMESERVER_FOR"}]
+    assert dropped == [
+        {"name": "_spf_telus_com.nssi.telus.com", "edge_type": "NAMESERVER_FOR"}
+    ]
 
 
 def test_collect_dropped_hostnames_handles_multiple_invalid_records():
@@ -506,7 +510,15 @@ def test_parse_registrar_strips_prefix_and_maps_to_identity():
     # Whisper REGISTRAR names carry a `registrar:` prefix (e.g.
     # "registrar:tucows domains inc.."). Strip the prefix so the Identity
     # SDO has a clean human-readable name.
-    rows = [{"n": {"nodeId": "1", "label": "REGISTRAR", "name": "registrar:Tucows Domains Inc."}}]
+    rows = [
+        {
+            "n": {
+                "nodeId": "1",
+                "label": "REGISTRAR",
+                "name": "registrar:Tucows Domains Inc.",
+            }
+        }
+    ]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["type"] == "identity"
     assert nodes[0]["properties"]["name"] == "Tucows Domains Inc."

@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+
 from src.connector.connector import WhisperConnector
 from src.connector.exceptions import WhisperTransportError
 from src.connector.whisper_client import CypherResult, WhisperClient
@@ -73,7 +74,9 @@ def test_process_message_no_whisper_data(connector, helper, client):
     helper.send_stix2_bundle.assert_not_called()
 
 
-def test_process_message_enriches_ipv4_with_resolves_to_hostname(connector, helper, client):
+def test_process_message_enriches_ipv4_with_resolves_to_hostname(
+    connector, helper, client
+):
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
@@ -129,7 +132,9 @@ def test_process_message_inlines_value_and_limit_into_query(connector, helper, c
     assert len(args) == 1
 
 
-def test_process_message_returns_no_mappable_rels_when_only_seed_remains(connector, helper, client):
+def test_process_message_returns_no_mappable_rels_when_only_seed_remains(
+    connector, helper, client
+):
     # Issue #44: when the parser drops every neighbour (unmappable labels
     # like CITY / PREFIX / COUNTRY / FEED_SOURCE) and leaves only the seed
     # observable plus no edges, the connector must NOT report success.
@@ -159,7 +164,9 @@ def test_process_message_returns_no_mappable_rels_when_only_seed_remains(connect
     helper.send_stix2_bundle.assert_not_called()
 
 
-def test_process_message_whisper_transport_error_propagates_and_logs(connector, helper, client):
+def test_process_message_whisper_transport_error_propagates_and_logs(
+    connector, helper, client
+):
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
@@ -172,7 +179,9 @@ def test_process_message_whisper_transport_error_propagates_and_logs(connector, 
     helper.connector_logger.error.assert_called()
 
 
-def test_process_message_accepts_observable_value_or_value_field(connector, helper, client):
+def test_process_message_accepts_observable_value_or_value_field(
+    connector, helper, client
+):
     # pycti returns different field names across versions - handle both.
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "domain-name--x",
@@ -192,7 +201,9 @@ def test_process_message_accepts_observable_value_or_value_field(connector, help
     assert '"example.test"' in first_query
 
 
-def test_process_message_enriches_autonomous_system_via_asn_anchor(connector, helper, client):
+def test_process_message_enriches_autonomous_system_via_asn_anchor(
+    connector, helper, client
+):
     # Issue #48: Autonomous-System is now an in-scope entity type. The
     # connector must derive the Whisper-anchor value from the observable's
     # `number` field (OpenCTI's `observable_value` for autonomous-system
@@ -234,7 +245,9 @@ def test_process_message_enriches_autonomous_system_via_asn_anchor(connector, he
     assert "ipv4-addr" in types
 
 
-def test_process_message_autonomous_system_without_number_falls_back(connector, helper, client):
+def test_process_message_autonomous_system_without_number_falls_back(
+    connector, helper, client
+):
     # Edge case: if the observable somehow lacks a `number` field (older
     # OpenCTI versions, manual STIX import, etc.), we fall back to whatever
     # observable_value / value carries - even if it likely won't match a
@@ -272,19 +285,29 @@ def _links_to_side_effect(
 
     def _side_effect(query, *_args, **_kwargs):
         if "count(m)" in query and "-[r:LINKS_TO]->" in query:
-            return CypherResult(columns=["c"], rows=[{"c": outbound_count}], statistics={})
+            return CypherResult(
+                columns=["c"], rows=[{"c": outbound_count}], statistics={}
+            )
         if "count(m)" in query and "<-[r:LINKS_TO]-" in query:
-            return CypherResult(columns=["c"], rows=[{"c": inbound_count}], statistics={})
+            return CypherResult(
+                columns=["c"], rows=[{"c": inbound_count}], statistics={}
+            )
         if "-[r:LINKS_TO]->" in query:
-            return CypherResult(columns=["n", "r", "m"], rows=outbound_rows, statistics={})
+            return CypherResult(
+                columns=["n", "r", "m"], rows=outbound_rows, statistics={}
+            )
         if "<-[r:LINKS_TO]-" in query:
-            return CypherResult(columns=["n", "r", "m"], rows=inbound_rows, statistics={})
+            return CypherResult(
+                columns=["n", "r", "m"], rows=inbound_rows, statistics={}
+            )
         return CypherResult(columns=["n", "r", "m"], rows=main_rows, statistics={})
 
     return _side_effect
 
 
-def test_links_to_supplementary_queries_fire_for_domain_name_seed(connector, helper, client):
+def test_links_to_supplementary_queries_fire_for_domain_name_seed(
+    connector, helper, client
+):
     # Domain-Name seed triggers (in order): main + LINKS_TO outbound +
     # LINKS_TO inbound + count_outbound + count_inbound. Plus the Phase B
     # threat-context query also fires for Domain-Name. This is the wiring
@@ -312,10 +335,18 @@ def test_links_to_supplementary_queries_fire_for_domain_name_seed(connector, hel
     assert len(main_queries) == 1
     assert len(links_to_queries) == 4
 
-    outbound_match = [q for q in links_to_queries if "-[r:LINKS_TO]->" in q and "count(m)" not in q]
-    inbound_match = [q for q in links_to_queries if "<-[r:LINKS_TO]-" in q and "count(m)" not in q]
-    count_outbound = [q for q in links_to_queries if "-[r:LINKS_TO]->" in q and "count(m)" in q]
-    count_inbound = [q for q in links_to_queries if "<-[r:LINKS_TO]-" in q and "count(m)" in q]
+    outbound_match = [
+        q for q in links_to_queries if "-[r:LINKS_TO]->" in q and "count(m)" not in q
+    ]
+    inbound_match = [
+        q for q in links_to_queries if "<-[r:LINKS_TO]-" in q and "count(m)" not in q
+    ]
+    count_outbound = [
+        q for q in links_to_queries if "-[r:LINKS_TO]->" in q and "count(m)" in q
+    ]
+    count_inbound = [
+        q for q in links_to_queries if "<-[r:LINKS_TO]-" in q and "count(m)" in q
+    ]
     assert len(outbound_match) == len(inbound_match) == 1
     assert len(count_outbound) == len(count_inbound) == 1
     # Cap (25) should be inlined into the directed queries - not LIMIT 50.
@@ -323,7 +354,9 @@ def test_links_to_supplementary_queries_fire_for_domain_name_seed(connector, hel
     assert "LIMIT 25" in inbound_match[0]
 
 
-def test_links_to_outbound_edge_tagged_and_oriented_seed_to_neighbour(connector, helper, client):
+def test_links_to_outbound_edge_tagged_and_oriented_seed_to_neighbour(
+    connector, helper, client
+):
     # Outbound LINKS_TO: seed → neighbour. Whisper returns the seed in `n`
     # (source) and neighbour in `m` (target) - parser default keeps that
     # orientation. The edge `description` must say "LINKS_TO outbound" so
@@ -494,11 +527,17 @@ def test_links_to_supplementary_skipped_for_non_domain_seeds(connector, helper, 
         queries = [c.args[0] for c in client.execute_cypher.call_args_list]
         # Zero directed/count LINKS_TO queries for non-Domain-Name seeds.
         for q in queries:
-            assert "-[r:LINKS_TO]" not in q, f"{entity_type}: unexpected LINKS_TO query: {q}"
-            assert "<-[r:LINKS_TO]" not in q, f"{entity_type}: unexpected LINKS_TO query: {q}"
+            assert (
+                "-[r:LINKS_TO]" not in q
+            ), f"{entity_type}: unexpected LINKS_TO query: {q}"
+            assert (
+                "<-[r:LINKS_TO]" not in q
+            ), f"{entity_type}: unexpected LINKS_TO query: {q}"
 
 
-def test_links_to_supplementary_failure_does_not_fail_enrichment(connector, helper, client):
+def test_links_to_supplementary_failure_does_not_fail_enrichment(
+    connector, helper, client
+):
     # The LINKS_TO supplementary pass is nice-to-have. If it raises a
     # transport error mid-flight, the main enrichment result still gets
     # delivered - we don't punish the seed because of a flaky follow-up.
@@ -567,7 +606,9 @@ def _seed_main_row(label="HOSTNAME", name="malware-traffic-analysis.net"):
     }
 
 
-def test_threat_context_emits_note_with_score_level_flags_and_feeds(connector, helper, client):
+def test_threat_context_emits_note_with_score_level_flags_and_feeds(
+    connector, helper, client
+):
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
@@ -670,7 +711,9 @@ def test_threat_context_omits_note_when_no_threat_data(connector, helper, client
     )
 
 
-def test_threat_context_note_emitted_with_score_only_no_feeds(connector, helper, client):
+def test_threat_context_note_emitted_with_score_only_no_feeds(
+    connector, helper, client
+):
     # Seed has a score and level but isn't on any FEED_SOURCE - still
     # produces a Note. The Note is the only analyst-visible breadcrumb that
     # Whisper has any threat opinion on this seed.
@@ -707,7 +750,9 @@ def test_threat_context_note_emitted_with_score_only_no_feeds(connector, helper,
     assert "Listed in" not in note["content"]
 
 
-def test_threat_context_query_failure_does_not_fail_enrichment(connector, helper, client):
+def test_threat_context_query_failure_does_not_fail_enrichment(
+    connector, helper, client
+):
     # Threat-context Phase B is best-effort - a transport error there must
     # still let the main bundle ship. Mirrors the Phase A LINKS_TO failure
     # path.
@@ -770,7 +815,9 @@ def test_threat_context_skipped_for_autonomous_system_seed(connector, helper, cl
         ), f"threat-context query unexpectedly fired for ASN: {q}"
 
 
-def test_threat_context_note_ships_even_when_no_mappable_relationships(connector, helper, client):
+def test_threat_context_note_ships_even_when_no_mappable_relationships(
+    connector, helper, client
+):
     # Seed has threat data but every main-query neighbour is a dropped
     # label (PREFIX). Without Phase B that's "No mappable Whisper
     # relationships" - but the threat Note IS meaningful, so the bundle
@@ -797,7 +844,9 @@ def test_threat_context_note_ships_even_when_no_mappable_relationships(connector
             }
         ],
     )
-    result = connector._process_message({"entity_id": "192.0.2.7"} | {"entity_id": "ipv4--x"})
+    result = connector._process_message(
+        {"entity_id": "192.0.2.7"} | {"entity_id": "ipv4--x"}
+    )
     assert "Enriched 192.0.2.7" in result
     helper.send_stix2_bundle.assert_called_once()
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
@@ -932,7 +981,9 @@ def test_network_context_emits_as_sco_edge_and_note(connector, helper, client):
     assert "Static allocation: 8.8.8.8/32" in content
 
 
-def test_network_context_falls_back_to_as_number_label_without_has_name(connector, helper, client):
+def test_network_context_falls_back_to_as_number_label_without_has_name(
+    connector, helper, client
+):
     helper.api.stix_cyber_observable.read.return_value = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
@@ -1006,7 +1057,9 @@ def test_network_context_handles_moas_multiple_announcers(connector, helper, cli
     connector._process_message({"entity_id": "ipv4--x"})
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
-    as_numbers = sorted(o["number"] for o in bundle["objects"] if o["type"] == "autonomous-system")
+    as_numbers = sorted(
+        o["number"] for o in bundle["objects"] if o["type"] == "autonomous-system"
+    )
     assert as_numbers == [100, 200]
 
     rels = [
@@ -1093,7 +1146,9 @@ def test_network_context_skipped_for_asn_seed(connector, helper, client):
         ), f"network-context query unexpectedly fired for ASN: {q}"
 
 
-def test_network_context_query_failure_does_not_fail_enrichment(connector, helper, client):
+def test_network_context_query_failure_does_not_fail_enrichment(
+    connector, helper, client
+):
     from src.connector.exceptions import WhisperTransportError
 
     helper.api.stix_cyber_observable.read.return_value = {
@@ -1122,7 +1177,9 @@ def test_network_context_query_failure_does_not_fail_enrichment(connector, helpe
     assert not any(o["type"] == "autonomous-system" for o in bundle["objects"])
 
 
-def test_network_context_omits_static_allocation_when_same_as_announced(connector, helper, client):
+def test_network_context_omits_static_allocation_when_same_as_announced(
+    connector, helper, client
+):
     # Issue #48 follow-up sanity: if Whisper returns a static PREFIX that
     # already matches the ANNOUNCED_PREFIX, the Note shouldn't repeat it
     # under a separate "Static allocation" line - that's pure noise.
@@ -1188,7 +1245,8 @@ def test_dropped_hostnames_note_emitted_with_seed_attachment(connector, helper, 
     notes = [
         o
         for o in bundle["objects"]
-        if o["type"] == "note" and o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
+        if o["type"] == "note"
+        and o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
     ]
     assert len(notes) == 1
     note = notes[0]
@@ -1235,7 +1293,9 @@ def test_dropped_hostnames_note_skipped_when_nothing_dropped(connector, helper, 
     )
 
 
-def test_dropped_hostnames_note_dedupes_same_name_across_rows(connector, helper, client):
+def test_dropped_hostnames_note_dedupes_same_name_across_rows(
+    connector, helper, client
+):
     # The same invalid HOSTNAME may appear in multiple rows (e.g. once
     # via NAMESERVER_FOR, once via MAIL_FOR). The Note must list it
     # exactly once - the first edge type wins so the content is stable.
@@ -1266,7 +1326,8 @@ def test_dropped_hostnames_note_dedupes_same_name_across_rows(connector, helper,
     note = next(
         o
         for o in bundle["objects"]
-        if o["type"] == "note" and o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
+        if o["type"] == "note"
+        and o.get("abstract") == "Whisper dropped non-RFC-1035 DNS records"
     )
     # The dropped name must appear exactly once in the body.
     assert note["content"].count("_spf.example.com") == 1
