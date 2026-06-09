@@ -96,10 +96,12 @@ LINKS_TO_QUERIES: dict[str, dict[str, str]] = {
             "RETURN n, r, m LIMIT $cap"
         ),
         "count_outbound": (
-            "MATCH (n:HOSTNAME {name: $value})-[r:LINKS_TO]->(m:HOSTNAME) " "RETURN count(m) AS c"
+            "MATCH (n:HOSTNAME {name: $value})-[r:LINKS_TO]->(m:HOSTNAME) "
+            "RETURN count(m) AS c"
         ),
         "count_inbound": (
-            "MATCH (n:HOSTNAME {name: $value})<-[r:LINKS_TO]-(m:HOSTNAME) " "RETURN count(m) AS c"
+            "MATCH (n:HOSTNAME {name: $value})<-[r:LINKS_TO]-(m:HOSTNAME) "
+            "RETURN count(m) AS c"
         ),
     }
 }
@@ -124,7 +126,9 @@ def get_query_for_entity_type(
     limit_int = int(limit)
     if limit_int < 1:
         raise ValueError(f"limit must be >= 1, got {limit_int}")
-    return template.replace("$value", json.dumps(str(value))).replace("$limit", str(limit_int))
+    return template.replace("$value", json.dumps(str(value))).replace(
+        "$limit", str(limit_int)
+    )
 
 
 # Threat-context supplementary queries. Anchors the threat-listed seed
@@ -184,7 +188,9 @@ def get_threat_context_query(
     limit_int = int(limit)
     if limit_int < 1:
         raise ValueError(f"limit must be >= 1, got {limit_int}")
-    return template.replace("$value", json.dumps(str(value))).replace("$limit", str(limit_int))
+    return template.replace("$value", json.dumps(str(value))).replace(
+        "$limit", str(limit_int)
+    )
 
 
 # IP → ASN/prefix supplementary query. Anchors on the seed IPv4/IPv6 node,
@@ -250,7 +256,9 @@ def get_network_context_query(
     limit_int = int(limit)
     if limit_int < 1:
         raise ValueError(f"limit must be >= 1, got {limit_int}")
-    return template.replace("$value", json.dumps(str(value))).replace("$limit", str(limit_int))
+    return template.replace("$value", json.dumps(str(value))).replace(
+        "$limit", str(limit_int)
+    )
 
 
 def get_links_to_queries(

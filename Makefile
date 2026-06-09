@@ -68,6 +68,21 @@ qa-clean: ## Stop the QA stack AND remove volumes (fresh state)
 test: ## Run unit tests (assumes `pip install -r requirements.txt -r requirements-dev.txt`)
 	pytest
 
-lint: ## Run ruff lint + format check
-	ruff check src/ tests/
-	ruff format --check src/ tests/
+# Lint + format toolchain matches OpenCTI-Platform/connectors upstream
+# (see shared/pylint_plugins/check_stix_plugin/ for the vendored STIX-ID
+# generator plugin). The pylint check set mirrors upstream's lint.yml —
+# `--disable=all --enable=no_generated_id_stix,no-value-for-parameter,unused-import`
+# — not a full style sweep.
+lint: ## Format check (isort + black) + flake8 + narrow pylint (vendored STIX-ID plugin)
+	isort --profile black --line-length 88 --check-only --diff .
+	black --check --diff .
+	flake8 --ignore=E,W .
+	cd shared/pylint_plugins/check_stix_plugin && \
+	  PYTHONPATH=. pylint ../../../src ../../../tests \
+	    --disable=all \
+	    --enable=no_generated_id_stix,no-value-for-parameter,unused-import \
+	    --load-plugins linter_stix_id_generator
+
+format: ## Apply isort + black formatting in place
+	isort --profile black --line-length 88 .
+	black .
