@@ -3,6 +3,7 @@ import logging
 import pytest
 import requests
 import responses
+
 from src.connector.exceptions import (
     WhisperAuthError,
     WhisperQueryError,
@@ -42,7 +43,11 @@ def test_execute_cypher_success_returns_full_result(client):
             {
                 "n": {"nodeId": "1", "label": "IPV4", "name": "8.8.8.8"},
                 "r": {"type": "BELONGS_TO"},
-                "m": {"nodeId": "2", "label": "REGISTERED_PREFIX", "name": "8.8.8.0/24"},
+                "m": {
+                    "nodeId": "2",
+                    "label": "REGISTERED_PREFIX",
+                    "name": "8.8.8.0/24",
+                },
             }
         ],
         statistics={"rowCount": 1, "executionTimeMs": 3},
@@ -92,7 +97,10 @@ def test_execute_cypher_sends_query_and_params(client):
     client.execute_cypher("MATCH (n {name: $name}) RETURN n", {"name": "8.8.8.8"})
     body = responses.calls[0].request.body
     assert b'"query":' in body
-    assert b'"params": {"name": "8.8.8.8"}' in body or b'"params":{"name":"8.8.8.8"}' in body
+    assert (
+        b'"params": {"name": "8.8.8.8"}' in body
+        or b'"params":{"name":"8.8.8.8"}' in body
+    )
 
 
 @responses.activate
@@ -138,7 +146,9 @@ def test_execute_cypher_recovers_after_5xx_then_200(client):
 @responses.activate
 def test_execute_cypher_connection_error_raises_transport_error(client):
     for _ in range(3):
-        responses.add(responses.POST, URL, body=requests.ConnectionError("network down"))
+        responses.add(
+            responses.POST, URL, body=requests.ConnectionError("network down")
+        )
     with pytest.raises(WhisperTransportError):
         client.execute_cypher("MATCH (n) RETURN n")
 
@@ -279,7 +289,9 @@ def test_execute_cypher_429_emits_info_log_per_retry(caplog):
     )
     with caplog.at_level(logging.INFO, logger="src.connector.whisper_client"):
         c.execute_cypher("MATCH (n) RETURN n")
-    rate_limit_lines = [r for r in caplog.records if "rate-limited (HTTP 429)" in r.getMessage()]
+    rate_limit_lines = [
+        r for r in caplog.records if "rate-limited (HTTP 429)" in r.getMessage()
+    ]
     assert len(rate_limit_lines) == 3
     assert all(r.levelname == "INFO" for r in rate_limit_lines)
     # Retry-After value must surface in the log so admins can see how long
