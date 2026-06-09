@@ -62,15 +62,23 @@ class WhisperConnector:
         client: WhisperClient | None = None,
     ) -> None:
         # Avoid loading config.yml when both deps are injected (tests).
-        config: dict = {} if (helper is not None and client is not None) else self._load_config()
+        config: dict = (
+            {} if (helper is not None and client is not None) else self._load_config()
+        )
         self.helper = helper if helper is not None else OpenCTIConnectorHelper(config)
         if client is not None:
             self.client = client
         else:
-            api_url = get_config_variable("WHISPER_API_URL", ["whisper", "api_url"], config)
-            api_key = get_config_variable("WHISPER_API_KEY", ["whisper", "api_key"], config)
+            api_url = get_config_variable(
+                "WHISPER_API_URL", ["whisper", "api_url"], config
+            )
+            api_key = get_config_variable(
+                "WHISPER_API_KEY", ["whisper", "api_key"], config
+            )
             if not api_url or not api_key:
-                raise ValueError("WHISPER_API_URL and WHISPER_API_KEY must be configured")
+                raise ValueError(
+                    "WHISPER_API_URL and WHISPER_API_KEY must be configured"
+                )
             self.client = WhisperClient(api_url=api_url, api_key=api_key)
 
     @staticmethod
@@ -82,7 +90,9 @@ class WhisperConnector:
         return {}
 
     @staticmethod
-    def _seed_stix_id(entity_type: str, entity_value: str, observable: dict) -> str | None:
+    def _seed_stix_id(
+        entity_type: str, entity_value: str, observable: dict
+    ) -> str | None:
         """Derive the deterministic STIX SCO id for the seed observable.
 
         Mirrors what `stix_mapper`'s node mappers produce. Used by `build_note`
@@ -100,7 +110,9 @@ class WhisperConnector:
                 number = observable.get("number")
                 if number is not None:
                     return stix2.AutonomousSystem(number=int(number)).id
-        except Exception:  # noqa: BLE001 — defensive; never fail the enrichment over this
+        except (
+            Exception
+        ):  # noqa: BLE001 — defensive; never fail the enrichment over this
             return None
         return None
 
@@ -147,7 +159,10 @@ class WhisperConnector:
                 if direction == "inbound":
                     # Swap source/target so the relationship correctly reads
                     # neighbour → seed instead of seed → neighbour.
-                    edge["source_id"], edge["target_id"] = edge["target_id"], edge["source_id"]
+                    edge["source_id"], edge["target_id"] = (
+                        edge["target_id"],
+                        edge["source_id"],
+                    )
                 edge["properties"] = {"description": f"LINKS_TO {direction}"}
             extra_nodes.extend(dir_nodes)
             extra_edges.extend(dir_edges)
@@ -190,7 +205,9 @@ class WhisperConnector:
         if not isinstance(value, int | float) or value <= 0:
             return None
         try:
-            return datetime.fromtimestamp(value / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return datetime.fromtimestamp(value / 1000, tz=UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
         except (ValueError, OSError, OverflowError):
             return None
 
@@ -215,7 +232,9 @@ class WhisperConnector:
         first_seen = WhisperConnector._epoch_ms_to_iso(first_row.get("threatFirstSeen"))
         last_seen = WhisperConnector._epoch_ms_to_iso(first_row.get("threatLastSeen"))
         if first_seen or last_seen:
-            lines.append(f"First seen: {first_seen or '?'}   Last seen: {last_seen or '?'}")
+            lines.append(
+                f"First seen: {first_seen or '?'}   Last seen: {last_seen or '?'}"
+            )
 
         true_flags = [flag for flag in THREAT_FLAG_FIELDS if first_row.get(flag)]
         if true_flags:
@@ -350,7 +369,9 @@ class WhisperConnector:
             lines.append(f"Announced by: {label}")
             _append_prefix_block(lines, a, indent="")
         elif announcers:
-            lines.append(f"Announced by {len(announcers)} ASN(s) — multi-origin (MOAS):")
+            lines.append(
+                f"Announced by {len(announcers)} ASN(s) — multi-origin (MOAS):"
+            )
             for a in announcers:
                 label = f"AS{a['asn_number']}"
                 if a.get("description"):
@@ -359,7 +380,9 @@ class WhisperConnector:
                 _append_prefix_block(lines, a, indent="    ")
 
         unannounced_static = {
-            p for p in static_prefixes if not any(p == a.get("prefix") for a in announcers)
+            p
+            for p in static_prefixes
+            if not any(p == a.get("prefix") for a in announcers)
         }
         if unannounced_static:
             lines.append("Static allocation: " + ", ".join(sorted(unannounced_static)))
@@ -483,7 +506,9 @@ class WhisperConnector:
                 )
 
         notes: list[stix2.Note] = []
-        content = self._format_network_content(list(announcers_by_id.values()), static_prefixes)
+        content = self._format_network_content(
+            list(announcers_by_id.values()), static_prefixes
+        )
         if seed_stix_id and content:
             notes.append(
                 build_note(
@@ -511,7 +536,9 @@ class WhisperConnector:
         if not entity_value:
             return f"observable {observable.get('id')!r} has no value to enrich"
 
-        query = get_query_for_entity_type(entity_type, value=entity_value, limit=DEFAULT_LIMIT)
+        query = get_query_for_entity_type(
+            entity_type, value=entity_value, limit=DEFAULT_LIMIT
+        )
         if query is None:
             return f"entity type {entity_type!r} not supported by Whisper enrichment"
 
@@ -559,7 +586,9 @@ class WhisperConnector:
         # Independently best-effort: a failure here must not block the main
         # bundle or the LINKS_TO Notes from shipping.
         try:
-            threat_notes = self._collect_threat_context(entity_type, entity_value, observable)
+            threat_notes = self._collect_threat_context(
+                entity_type, entity_value, observable
+            )
         except WhisperClientError as exc:
             self.helper.connector_logger.error(
                 "Whisper threat-context query failed (continuing)",
