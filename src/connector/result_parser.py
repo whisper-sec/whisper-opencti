@@ -6,7 +6,7 @@ Whisper row cell shapes (per the live API, captured in PR #11):
 - Edge cell: ``{"type": "<UPPERCASE>", ...}``  (no source/target — inferred
   from neighbouring node columns)
 
-Output shape (consumed by ``stix_mapper.build_bundle``):
+Output shape (consumed by ``converter_to_stix.build_bundle``):
 
 - ``nodes`` — list of ``{"id", "type", "properties"}``
 - ``edges`` — list of ``{"source_id", "target_id", "type", "properties"}``
