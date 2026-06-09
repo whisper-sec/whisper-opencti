@@ -140,7 +140,9 @@ class WhisperClient:
         """
         url = f"{self.api_url}{CYPHER_PATH}"
         payload: dict[str, Any] = {"query": query, "params": params or {}}
-        logger.debug("whisper request url=%s param_keys=%s", url, list(payload["params"].keys()))
+        logger.debug(
+            "whisper request url=%s param_keys=%s", url, list(payload["params"].keys())
+        )
 
         try:
             response = self._session.post(
@@ -151,7 +153,9 @@ class WhisperClient:
                 verify=self.verify_ssl,
             )
         except requests.RequestException as exc:
-            raise WhisperTransportError(f"transport error contacting Whisper API: {exc}") from exc
+            raise WhisperTransportError(
+                f"transport error contacting Whisper API: {exc}"
+            ) from exc
 
         if response.status_code in (401, 403):
             raise WhisperAuthError(
@@ -163,7 +167,9 @@ class WhisperClient:
             # throttling us; raise transport (not query) so QA / the work
             # item triage treats it as a quota incident rather than a
             # malformed-Cypher bug. Issue #30.
-            raise WhisperTransportError("Whisper API rate-limited (HTTP 429) after retries")
+            raise WhisperTransportError(
+                "Whisper API rate-limited (HTTP 429) after retries"
+            )
         if response.status_code >= 500:
             raise WhisperTransportError(
                 f"Whisper API returned HTTP {response.status_code} after retries"
@@ -177,7 +183,9 @@ class WhisperClient:
         try:
             body = response.json()
         except ValueError as exc:
-            raise WhisperQueryError(f"Whisper API returned non-JSON body: {exc}") from exc
+            raise WhisperQueryError(
+                f"Whisper API returned non-JSON body: {exc}"
+            ) from exc
 
         if body.get("success") is False:
             raise WhisperQueryError(
