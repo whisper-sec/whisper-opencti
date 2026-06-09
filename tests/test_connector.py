@@ -1,98 +1,11 @@
 import json
-from unittest.mock import MagicMock
 
 import pytest
 
 from src.connector.connector import WhisperConnector
 from src.connector.exceptions import WhisperTransportError
-from src.connector.settings import WhisperSettings
-from src.connector.whisper_client import CypherResult, WhisperClient
-
-
-@pytest.fixture
-def helper():
-    """v7 helper: ``stix2_create_bundle`` is the only helper API we use
-    on the send path; we mock it as identity-ish so test bodies can read
-    the serialized bundle from ``send_stix2_bundle.call_args``.
-    """
-    h = MagicMock()
-
-    # Identity-ish: pass through a serialized JSON form of the objects
-    # list so tests can json.loads the call_args and inspect the bundle.
-    # Handle both stix2 objects (which have .serialize()) and raw dicts
-    # (e.g. the playbook-passthrough path forwards the worker-supplied
-    # stix_objects list verbatim).
-    def _create_bundle(objects):
-        return json.dumps(
-            {
-                "objects": [
-                    json.loads(o.serialize()) if hasattr(o, "serialize") else o
-                    for o in objects
-                ]
-            }
-        )
-
-    h.stix2_create_bundle.side_effect = _create_bundle
-    return h
-
-
-@pytest.fixture
-def client():
-    return MagicMock(spec=WhisperClient)
-
-
-@pytest.fixture
-def make_config():
-    """Factory for ``WhisperSettings`` instances. Default ``max_tlp=TLP:RED``
-    keeps every test observable below the ceiling unless a test overrides.
-    Override via ``make_config(max_tlp="TLP:AMBER")`` etc. - the settings
-    object is frozen, so direct mutation isn't possible.
-    """
-
-    def _factory(**overrides) -> WhisperSettings:
-        defaults: dict = {
-            "api_url": "https://api.whisper.test",
-            "api_key": "test-key",
-            "max_tlp": "TLP:RED",
-        }
-        return WhisperSettings(**{**defaults, **overrides})
-
-    return _factory
-
-
-@pytest.fixture
-def config(make_config):
-    return make_config()
-
-
-@pytest.fixture
-def connector(helper, config, client):
-    return WhisperConnector(helper=helper, config=config, client=client)
-
-
-def _v7_payload(
-    observable: dict,
-    *,
-    event_type: str = "create",
-    stix_objects: list | None = None,
-) -> dict:
-    """Build a v7 ``_process_message`` data dict.
-
-    The v7 internal-enrichment callback receives the observable
-    directly (no ``helper.api.stix_cyber_observable.read`` round-trip),
-    plus a STIX-form view and the bundle's ``stix_objects`` for
-    playbook pass-through. Default ``event_type="create"`` simulates a
-    real-time enrichment request; pass ``event_type=None`` to simulate
-    a playbook chain.
-    """
-    payload = {
-        "enrichment_entity": observable,
-        "stix_entity": observable,
-        "stix_objects": stix_objects or [],
-    }
-    if event_type is not None:
-        payload["event_type"] = event_type
-    return payload
+from src.connector.whisper_client import CypherResult
+from tests.conftest import _v7_payload
 
 
 def test_process_message_no_enrichment_entity_returns_status(connector, helper):

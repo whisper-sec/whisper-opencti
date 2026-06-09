@@ -65,7 +65,7 @@ qa-status: ## Show status of QA stack services
 qa-clean: ## Stop the QA stack AND remove volumes (fresh state)
 	$(COMPOSE_QA) down -v
 
-test: ## Run unit tests (assumes `pip install -r requirements.txt -r requirements-dev.txt`)
+test: ## Run unit tests (assumes `pip install -r tests/test-requirements.txt`)
 	pytest
 
 # Lint + format toolchain matches OpenCTI-Platform/connectors upstream
