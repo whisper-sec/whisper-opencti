@@ -61,10 +61,12 @@ returned that don't conform to RFC 1035.
 
 | Component | Version |
 | --- | --- |
-| OpenCTI platform | **6.4.5** (verified). Other 6.4.x releases very likely work; OpenCTI 6.3.x and earlier are not tested. |
-| Python (image runtime) | 3.11 |
-| `pycti` | 6.4.5 (pinned to match the platform) |
+| OpenCTI platform | **7.260604.0** (verified). The platform and `pycti` are now released in lockstep on the same CalVer string — bumping one without the other will fail at connector registration time (mismatched GraphQL schema). |
+| Python (image runtime) | 3.12 (alpine) |
+| `pycti` | 7.260604.0 (pinned to match the platform version exactly) |
+| `pydantic` | >=2.8.2, <3.0.0 |
 | `stix2` | 3.0.1 |
+| `validators` | 0.35.0 |
 | Docker Desktop or compatible engine | with at least 6 GB RAM available |
 | `make` | for the dev / qa workflows |
 
@@ -103,13 +105,14 @@ also accepted in a mounted `config.yml` (see
 | --- | --- | --- | --- |
 | `WHISPER_API_URL` | yes | — | Base URL of the Whisper graph API, typically `https://graph.whisper.security`. The connector POSTs Cypher queries to `<api_url>/api/query`. |
 | `WHISPER_API_KEY` | yes | — | Your Whisper API key. Sent in the `X-API-Key` header on every request. Never logged. |
+| `WHISPER_MAX_TLP` | no | `TLP:AMBER+STRICT` | Maximum TLP marking the connector will enrich. Observables marked above this level are skipped with a `WhisperTlpError` status. Allowed values: `TLP:WHITE`, `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT`, `TLP:RED`. |
 
 ## Deployment
 
 ### Local Dev Stack
 
 A single command brings up a stock OpenCTI instance, its dependencies, and the
-connector wired together. Pinned to OpenCTI **6.4.5**.
+connector wired together. Pinned to OpenCTI **7.260604.0**.
 
 #### 1. Create your `.env` from the template
 
