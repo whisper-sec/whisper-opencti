@@ -1,4 +1,5 @@
 import pytest
+
 from src.connector.queries import (
     DEFAULT_LIMIT,
     NETWORK_CONTEXT_LIMIT,
@@ -38,7 +39,9 @@ def test_get_query_uses_default_limit_when_not_supplied():
 
 def test_get_query_json_escapes_value_for_safety():
     # A quote in the value must not break out of the Cypher string literal.
-    q = get_query_for_entity_type("Domain-Name", value='evil"; DROP-something // ', limit=1)
+    q = get_query_for_entity_type(
+        "Domain-Name", value='evil"; DROP-something // ', limit=1
+    )
     # json.dumps escapes the inner double-quote with a backslash.
     assert '"evil\\"; DROP-something // "' in q
 
