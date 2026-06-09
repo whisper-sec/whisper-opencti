@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 import stix2
 from pycti import OpenCTIConnectorHelper
 
-from src.connector.config import ConfigConnector
 from src.connector.exceptions import (
     StixMappingError,
     WhisperClientError,
@@ -21,6 +20,7 @@ from src.connector.queries import (
     supported_entity_types,
 )
 from src.connector.result_parser import collect_dropped_hostnames, parse_cypher_result
+from src.connector.settings import WhisperSettings
 from src.connector.stix_mapper import build_bundle, build_note
 from src.connector.whisper_client import WhisperClient
 
@@ -63,21 +63,20 @@ class WhisperConnector:
     def __init__(
         self,
         helper: OpenCTIConnectorHelper,
-        config: ConfigConnector,
+        config: WhisperSettings,
         client: WhisperClient | None = None,
     ) -> None:
-        """Construct the connector with externally-built helper and config.
+        """Construct the connector with externally-built helper and settings.
 
-        ``main.py`` builds the helper from ``config.load`` (the loaded
-        config dict) and the connector then consumes the typed
-        ``ConfigConnector`` attributes — `whisper_api_url`,
-        `whisper_api_key`, `whisper_max_tlp`. ``client`` is injectable
+        ``main.py`` builds the helper from the parsed ``config.yml`` dict
+        and the connector consumes the typed ``WhisperSettings`` fields
+        (``api_url``, ``api_key``, ``max_tlp``). ``client`` is injectable
         for tests; production passes a freshly-built ``WhisperClient``.
         """
         self.helper = helper
         self.config = config
         self.client = client or WhisperClient(
-            api_url=config.whisper_api_url, api_key=config.whisper_api_key
+            api_url=config.api_url, api_key=config.api_key
         )
 
     @staticmethod
@@ -126,7 +125,7 @@ class WhisperConnector:
         the TLP ceiling would leak intel to a less-trusted Whisper
         account. Raises ``WhisperTlpError`` on violation.
         """
-        max_tlp = self.config.whisper_max_tlp
+        max_tlp = self.config.max_tlp
         for marking in observable.get("objectMarking", []) or []:
             if marking.get("definition_type") == "TLP" and not (
                 OpenCTIConnectorHelper.check_max_tlp(
