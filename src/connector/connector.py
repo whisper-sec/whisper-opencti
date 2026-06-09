@@ -1,12 +1,15 @@
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 
 import stix2
-import yaml
-from pycti import OpenCTIConnectorHelper, get_config_variable
+from pycti import OpenCTIConnectorHelper
 
-from src.connector.exceptions import StixMappingError, WhisperClientError
+from src.connector.config import ConfigConnector
+from src.connector.exceptions import (
+    StixMappingError,
+    WhisperClientError,
+    WhisperTlpError,
+)
 from src.connector.queries import (
     DEFAULT_LIMIT,
     LINKS_TO_CAP,
@@ -15,6 +18,7 @@ from src.connector.queries import (
     get_network_context_query,
     get_query_for_entity_type,
     get_threat_context_query,
+    supported_entity_types,
 )
 from src.connector.result_parser import collect_dropped_hostnames, parse_cypher_result
 from src.connector.stix_mapper import build_bundle, build_note
@@ -58,36 +62,23 @@ class WhisperConnector:
 
     def __init__(
         self,
-        helper: OpenCTIConnectorHelper | None = None,
+        helper: OpenCTIConnectorHelper,
+        config: ConfigConnector,
         client: WhisperClient | None = None,
     ) -> None:
-        # Avoid loading config.yml when both deps are injected (tests).
-        config: dict = (
-            {} if (helper is not None and client is not None) else self._load_config()
-        )
-        self.helper = helper if helper is not None else OpenCTIConnectorHelper(config)
-        if client is not None:
-            self.client = client
-        else:
-            api_url = get_config_variable(
-                "WHISPER_API_URL", ["whisper", "api_url"], config
-            )
-            api_key = get_config_variable(
-                "WHISPER_API_KEY", ["whisper", "api_key"], config
-            )
-            if not api_url or not api_key:
-                raise ValueError(
-                    "WHISPER_API_URL and WHISPER_API_KEY must be configured"
-                )
-            self.client = WhisperClient(api_url=api_url, api_key=api_key)
+        """Construct the connector with externally-built helper and config.
 
-    @staticmethod
-    def _load_config() -> dict:
-        config_file_path = Path(__file__).resolve().parent.parent.parent / "config.yml"
-        if config_file_path.is_file():
-            with open(config_file_path) as fh:
-                return yaml.safe_load(fh) or {}
-        return {}
+        ``main.py`` builds the helper from ``config.load`` (the loaded
+        config dict) and the connector then consumes the typed
+        ``ConfigConnector`` attributes — `whisper_api_url`,
+        `whisper_api_key`, `whisper_max_tlp`. ``client`` is injectable
+        for tests; production passes a freshly-built ``WhisperClient``.
+        """
+        self.helper = helper
+        self.config = config
+        self.client = client or WhisperClient(
+            api_url=config.whisper_api_url, api_key=config.whisper_api_key
+        )
 
     @staticmethod
     def _seed_stix_id(
@@ -116,16 +107,102 @@ class WhisperConnector:
             return None
         return None
 
-    def _process_message(self, data: dict) -> str:
-        entity_id = data.get("entity_id")
-        if not entity_id:
-            return "missing entity_id in enrichment request"
+    def _is_entity_in_scope(self, entity_type: str) -> bool:
+        """Whether ``entity_type`` has a Whisper Cypher template.
 
-        observable = self.helper.api.stix_cyber_observable.read(id=entity_id)
-        if observable is None:
-            return f"entity {entity_id!r} not found as observable"
+        Mirrors the ``QUERIES`` keyset; we don't read ``helper.connect_scope``
+        because the scope env var may legitimately be a superset (the
+        operator might enable the connector for ``Url`` even though we
+        return ``not supported``, just to discover supported types).
+        """
+        return entity_type in supported_entity_types()
+
+    def _extract_and_check_markings(self, observable: dict) -> None:
+        """Refuse to enrich if the observable's TLP marking exceeds
+        ``whisper.max_tlp``. Pulled from the shodan-internetdb pattern.
+
+        The connector's Whisper API key effectively grants access to
+        whatever the OpenCTI user it impersonates can see; enriching past
+        the TLP ceiling would leak intel to a less-trusted Whisper
+        account. Raises ``WhisperTlpError`` on violation.
+        """
+        max_tlp = self.config.whisper_max_tlp
+        for marking in observable.get("objectMarking", []) or []:
+            if marking.get("definition_type") == "TLP" and not (
+                OpenCTIConnectorHelper.check_max_tlp(
+                    tlp=marking["definition"], max_tlp=max_tlp
+                )
+            ):
+                raise WhisperTlpError(
+                    f"observable TLP marking {marking['definition']!r} "
+                    f"exceeds whisper.max_tlp={max_tlp!r}"
+                )
+
+    def _send_passthrough_bundle(self, stix_objects: list) -> str:
+        """Re-ship the worker-supplied bundle unchanged.
+
+        Used in two cases under v7 ``playbook_compatible=True``:
+        1. Out-of-scope entity arriving via a playbook chain (no
+           ``event_type``) — downstream playbook nodes would lose data
+           if we returned an empty bundle.
+        2. Defensive default for any unanticipated playbook routing.
+        """
+        if not stix_objects:
+            return "playbook pass-through: no stix_objects to forward"
+        bundle = self.helper.stix2_create_bundle(stix_objects)
+        self.helper.send_stix2_bundle(bundle)
+        return f"playbook pass-through: forwarded {len(stix_objects)} STIX object(s)"
+
+    def _process_message(self, data: dict) -> str:
+        """v7 internal-enrichment callback.
+
+        The data dict carries everything we need — pycti 7.x hands us
+        the enrichment entity, its STIX form, and the bundle's stix
+        objects directly, removing the need for a separate
+        ``helper.api.stix_cyber_observable.read()`` round-trip.
+
+        Flow:
+        1. TLP check → refuse if observable marking exceeds max_tlp.
+        2. Scope check → for unsupported types, either return a clear
+           status (real-time event) or pass through the original bundle
+           (playbook chain).
+        3. Delegate to ``_enrich_observable`` for the real enrichment.
+        """
+        observable = data.get("enrichment_entity") or {}
+        stix_objects = data.get("stix_objects") or []
+        if not observable:
+            return "missing enrichment_entity in v7 callback payload"
+
+        try:
+            self._extract_and_check_markings(observable)
+        except WhisperTlpError as exc:
+            self.helper.connector_logger.warning(
+                "Refusing to enrich — TLP exceeds whisper.max_tlp",
+                {"entity_id": observable.get("id"), "error": str(exc)},
+            )
+            return str(exc)
+
+        entity_type = observable.get("entity_type") or ""
+        if not self._is_entity_in_scope(entity_type):
+            if data.get("event_type"):
+                # Real-time enrichment request: tell the analyst the type
+                # isn't supported, don't ship a bundle.
+                return (
+                    f"entity type {entity_type!r} not supported by Whisper enrichment"
+                )
+            # Playbook chain: forward the original bundle so downstream
+            # nodes see the entity untouched. This is the v7
+            # playbook_compatible=True contract.
+            return self._send_passthrough_bundle(stix_objects)
 
         return self._enrich_observable(observable)
+
+    def run(self) -> None:
+        """Block on the OpenCTI queue, dispatching ``_process_message``
+        for each enrichment request. Called from ``main.py`` after the
+        helper has been built.
+        """
+        self.helper.listen(message_callback=self._process_message)
 
     def _collect_links_to(
         self,
@@ -675,7 +752,12 @@ class WhisperConnector:
         if not objects:
             return f"No mappable Whisper data for {entity_value}"
 
-        self.helper.send_stix2_bundle(bundle.serialize())
+        # v7 / upstream convention: build the bundle via the helper rather
+        # than serializing the stix2.Bundle ourselves. ``build_bundle``
+        # still produces a ``stix2.Bundle`` for the unit tests' sake;
+        # ``helper.stix2_create_bundle`` consumes the object list.
+        stix_bundle = self.helper.stix2_create_bundle(objects)
+        self.helper.send_stix2_bundle(stix_bundle)
         elapsed = result.statistics.get("executionTimeMs", "?")
         self.helper.connector_logger.info(
             "Sent STIX bundle",
@@ -686,6 +768,3 @@ class WhisperConnector:
             },
         )
         return f"Enriched {entity_value} with {len(objects)} STIX objects (query: {elapsed}ms)"
-
-    def start(self) -> None:
-        self.helper.listen(message_callback=self._process_message)
