@@ -20,7 +20,9 @@ WORKDIR /opt/connector
 # Runtime libs that pycti transitively pulls in (python-magic needs libmagic;
 # cryptography needs libffi). Build-time toolchain is installed as a virtual
 # package and removed after pip install to keep the final image small.
-COPY requirements.txt ./
+# Copy just the requirements first (from src/, per the upstream template
+# layout) so the dependency layer caches independently of source changes.
+COPY src/requirements.txt ./
 RUN apk add --no-cache libmagic libffi && \
     apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev && \
     pip install --no-cache-dir -r requirements.txt && \

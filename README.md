@@ -71,7 +71,7 @@ returned that don't conform to RFC 1035.
 | `make` | for the dev / qa workflows |
 
 If you upgrade OpenCTI to a new minor, bump `pycti` in
-[requirements.txt](./requirements.txt) and the platform/worker image tags in
+[src/requirements.txt](./src/requirements.txt) and the platform/worker image tags in
 [docker-compose.dev.yml](./docker-compose.dev.yml) together — running
 mismatched versions causes the connector to fail at registration time.
 
@@ -459,7 +459,7 @@ appropriate severity.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+pip install -r src/requirements.txt -r requirements-dev.txt
 
 make lint    # ruff check + ruff format --check
 make test    # pytest
@@ -481,13 +481,16 @@ and current status.
 │   ├── architecture.md     # System design + per-module deep dive
 │   ├── scenarios/          # Worked enrichment walk-throughs
 │   └── qa-handoff.md       # QA test matrix + known limitations
-├── src/connector/
-│   ├── connector.py        # WhisperConnector class + callback
-│   ├── whisper_client.py   # HTTP client with retries (5xx + 429)
-│   ├── queries.py          # Cypher templates per entity type
-│   ├── result_parser.py    # Whisper rows → normalized nodes/edges
-│   ├── converter_to_stix.py # Normalized → STIX 2.1 bundle
-│   └── exceptions.py
+├── src/
+│   ├── main.py             # Entry point (OpenCTI startup retry + run)
+│   ├── requirements.txt    # Runtime deps (pycti, stix2, …) — in src/ per template
+│   └── connector/
+│       ├── connector.py        # WhisperConnector class + callback
+│       ├── whisper_client.py   # HTTP client with retries (5xx + 429)
+│       ├── queries.py          # Cypher templates per entity type
+│       ├── result_parser.py    # Whisper rows → normalized nodes/edges
+│       ├── converter_to_stix.py # Normalized → STIX 2.1 bundle
+│       └── exceptions.py
 ├── tests/                  # pytest suite
 ├── Dockerfile
 ├── docker-compose.yml      # Connector-only snippet for existing OpenCTI deployments
@@ -497,8 +500,7 @@ and current status.
 ├── Makefile                # dev-up / qa-up / test / lint
 ├── config.yml.sample
 ├── .env.example            # Single source of truth; cp to .env (gitignored)
-├── pyproject.toml
-└── requirements.txt
+└── pyproject.toml
 ```
 
 ### Further Reading
