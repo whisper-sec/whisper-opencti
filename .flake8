@@ -1,0 +1,14 @@
+[flake8]
+# Matches the upstream OpenCTI-Platform/connectors lint.yml invocation
+# (`flake8 --ignore=E,W .`) — we only want pyflakes errors and mccabe
+# complexity warnings, not style checks (black + isort own formatting).
+extend-exclude =
+    .venv,
+    .git,
+    __pycache__,
+    .pytest_cache,
+    .ruff_cache,
+    the local tooling,
+    build,
+    dist,
+    *.egg-info

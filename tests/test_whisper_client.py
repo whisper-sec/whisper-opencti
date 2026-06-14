@@ -3,6 +3,7 @@ import logging
 import pytest
 import requests
 import responses
+
 from src.connector.exceptions import (
     WhisperAuthError,
     WhisperQueryError,
@@ -42,7 +43,11 @@ def test_execute_cypher_success_returns_full_result(client):
             {
                 "n": {"nodeId": "1", "label": "IPV4", "name": "8.8.8.8"},
                 "r": {"type": "BELONGS_TO"},
-                "m": {"nodeId": "2", "label": "REGISTERED_PREFIX", "name": "8.8.8.0/24"},
+                "m": {
+                    "nodeId": "2",
+                    "label": "REGISTERED_PREFIX",
+                    "name": "8.8.8.0/24",
+                },
             }
         ],
         statistics={"rowCount": 1, "executionTimeMs": 3},
@@ -92,7 +97,10 @@ def test_execute_cypher_sends_query_and_params(client):
     client.execute_cypher("MATCH (n {name: $name}) RETURN n", {"name": "8.8.8.8"})
     body = responses.calls[0].request.body
     assert b'"query":' in body
-    assert b'"params": {"name": "8.8.8.8"}' in body or b'"params":{"name":"8.8.8.8"}' in body
+    assert (
+        b'"params": {"name": "8.8.8.8"}' in body
+        or b'"params":{"name":"8.8.8.8"}' in body
+    )
 
 
 @responses.activate
@@ -138,7 +146,9 @@ def test_execute_cypher_recovers_after_5xx_then_200(client):
 @responses.activate
 def test_execute_cypher_connection_error_raises_transport_error(client):
     for _ in range(3):
-        responses.add(responses.POST, URL, body=requests.ConnectionError("network down"))
+        responses.add(
+            responses.POST, URL, body=requests.ConnectionError("network down")
+        )
     with pytest.raises(WhisperTransportError):
         client.execute_cypher("MATCH (n) RETURN n")
 
@@ -206,3 +216,84 @@ def test_context_manager_closes_session(client):
     # Session is closed; another request would re-open connections but the
     # session object itself should still be usable post-close. Just verify
     # no exception leaked from __exit__.
+
+
+# --- 429-aware backoff (issue #30) ----------------------------------------
+
+
+@responses.activate
+def test_execute_cypher_429_retried_then_recovers_after_200(client):
+    # Three consecutive 429s with Retry-After: 0 (instant, keeps the test
+    # fast) followed by a 200 — urllib3 should burn through the 429s and
+    # surface the 200 body without raising.
+    for _ in range(3):
+        responses.add(
+            responses.POST,
+            URL,
+            json={"error": "rate limited"},
+            status=429,
+            headers={"Retry-After": "0"},
+        )
+    responses.add(responses.POST, URL, json=_ok(rows=[{"ok": True}]), status=200)
+
+    # The default client fixture caps retries at 2; we need at least 3 retries
+    # to clear three 429s before reaching the 200. Build a dedicated client.
+    c = WhisperClient(
+        api_url="https://api.whisper.test",
+        api_key="test-key",
+        max_retries=3,
+        backoff_factor=0,
+    )
+    result = c.execute_cypher("MATCH (n) RETURN n")
+    assert result.rows == [{"ok": True}]
+    assert len(responses.calls) == 4
+
+
+@responses.activate
+def test_execute_cypher_quota_exhaustion_raises_transport_error(client):
+    # Issue #30 AC: ten 429s in a row (i.e. retries exhausted) must raise
+    # WhisperTransportError, NOT WhisperQueryError. The error-class
+    # distinction is what lets QA bucket this as a quota incident instead
+    # of a malformed-Cypher bug.
+    for _ in range(10):
+        responses.add(
+            responses.POST,
+            URL,
+            json={"error": "rate limited"},
+            status=429,
+            headers={"Retry-After": "0"},
+        )
+    with pytest.raises(WhisperTransportError, match="rate-limited"):
+        client.execute_cypher("MATCH (n) RETURN n")
+
+
+@responses.activate
+def test_execute_cypher_429_emits_info_log_per_retry(caplog):
+    # Each retry on a 429 should produce one info-level log line so admins
+    # can correlate quota spikes with enrichment failures. Three 429s →
+    # three info lines, then a 200 closes out cleanly.
+    for _ in range(3):
+        responses.add(
+            responses.POST,
+            URL,
+            status=429,
+            headers={"Retry-After": "0"},
+        )
+    responses.add(responses.POST, URL, json=_ok(), status=200)
+
+    c = WhisperClient(
+        api_url="https://api.whisper.test",
+        api_key="test-key",
+        max_retries=3,
+        backoff_factor=0,
+    )
+    with caplog.at_level(logging.INFO, logger="src.connector.whisper_client"):
+        c.execute_cypher("MATCH (n) RETURN n")
+    rate_limit_lines = [
+        r for r in caplog.records if "rate-limited (HTTP 429)" in r.getMessage()
+    ]
+    assert len(rate_limit_lines) == 3
+    assert all(r.levelname == "INFO" for r in rate_limit_lines)
+    # Retry-After value must surface in the log so admins can see how long
+    # Whisper asked us to back off for.
+    assert all("Retry-After=0" in r.getMessage() for r in rate_limit_lines)
