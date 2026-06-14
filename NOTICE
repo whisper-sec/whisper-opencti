@@ -1,0 +1,25 @@
+Whisper OpenCTI Connector
+Copyright 2026 Whisper Security, Inc.
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+================================================================================
+Third-party components
+================================================================================
+
+This product includes the STIX2 ID generation pylint checker
+("check_stix_plugin"), vendored verbatim into
+shared/pylint_plugins/check_stix_plugin/ from the OpenCTI Connectors project
+maintained by Filigran:
+
+    OpenCTI-Platform/connectors
+    Licensed under the Apache License, Version 2.0
+    https://github.com/OpenCTI-Platform/connectors
+
+This product includes registrar-name reference data
+(src/connector/iana_registrars.py) derived from the IANA Registrar IDs
+registry, a public registry maintained by the Internet Assigned Numbers
+Authority (IANA):
+
+    https://www.iana.org/assignments/registrar-ids/
