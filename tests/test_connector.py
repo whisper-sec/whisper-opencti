@@ -247,116 +247,191 @@ def test_process_message_autonomous_system_without_number_falls_back(
 # --- LINKS_TO supplementary enrichment (issue #48 Phase A) -----------------
 
 
-def _links_to_side_effect(
-    main_rows: list,
-    outbound_rows: list,
-    inbound_rows: list,
-    outbound_count: int,
-    inbound_count: int,
+# Substring fingerprints that pick a query out of the targeted Domain-Name
+# flow (issue #61). Direction-bearing arrows distinguish a domain's OWN
+# records (direct facts) from the reverse-direction pivots.
+_DIRECT_FACT_NEEDLE = {
+    "a-record": "-[:RESOLVES_TO]->(m:IPV4)",
+    "aaaa-record": "-[:RESOLVES_TO]->(m:IPV6)",
+    "cname": "-[:ALIAS_OF]->(m:HOSTNAME)",
+    "name-server": "<-[:NAMESERVER_FOR]-(m:HOSTNAME)",
+    "mx-server": "<-[:MAIL_FOR]-(m:HOSTNAME)",
+    "registrar": "-[:HAS_REGISTRAR]->",
+    "previous-registrar": "-[:PREV_REGISTRAR]->",
+    "registered-by": "-[:REGISTERED_BY]->",
+    "whois-email": "-[:HAS_EMAIL]->",
+}
+_PIVOT_NEEDLE = {
+    "nameserver-for-domain": "-[:NAMESERVER_FOR]->(m:HOSTNAME)",
+    "mail-server-for-domain": "-[:MAIL_FOR]->(m:HOSTNAME)",
+    "subdomain": "<-[:CHILD_OF]-(m:HOSTNAME)",
+    "cname-pointing-to-seed": "<-[:ALIAS_OF]-(m:HOSTNAME)",
+}
+
+
+def _hm_row(seed_name, seed_id, m_id, m_label, m_name):
+    """One ``RETURN h, m`` row pairing the seed HOSTNAME with a neighbour."""
+    return {
+        "h": {"nodeId": seed_id, "label": "HOSTNAME", "name": seed_name},
+        "m": {"nodeId": m_id, "label": m_label, "name": m_name},
+    }
+
+
+def _domain_side_effect(
+    seed_name="example.test",
+    direct=None,
+    pivot=None,
+    counts=None,
+    links=None,
+    threat_rows=None,
+    variant_names=None,
+    spf_rows=None,
+    phone_rows=None,
 ):
-    """Build an execute_cypher side_effect that returns different rows per
-    query, dispatched by which Cypher template was passed in.
+    """execute_cypher side_effect for the targeted Domain-Name flow.
 
-    The connector issues 5 calls for a Domain-Name seed: 1 main, then
-    outbound, inbound, count_outbound, count_inbound (in that order).
-    Matching on substrings keeps the test resilient to whitespace changes.
+    ``direct``/``pivot`` map a category description to its ``RETURN h, m`` rows;
+    ``counts`` maps a pivot description to its total count; ``links`` carries
+    the LINKS_TO outbound/inbound rows + counts. Anything not supplied returns
+    empty. By default ``direct`` seeds a single A record so the seed
+    Domain-Name SCO is present in the bundle.
     """
+    if direct is None:
+        direct = {"a-record": [_hm_row(seed_name, "seed", "ip-a", "IPV4", "1.2.3.4")]}
+    pivot = pivot or {}
+    counts = counts or {}
+    links = links or {}
 
-    def _side_effect(query, *_args, **_kwargs):
+    def _se(query, *_args, **_kwargs):
+        # LINKS_TO directed rows + counts (handled by the existing collector).
         if "count(m)" in query and "-[r:LINKS_TO]->" in query:
             return CypherResult(
-                columns=["c"], rows=[{"c": outbound_count}], statistics={}
+                columns=["c"],
+                rows=[{"c": links.get("outbound_count", 0)}],
+                statistics={},
             )
         if "count(m)" in query and "<-[r:LINKS_TO]-" in query:
             return CypherResult(
-                columns=["c"], rows=[{"c": inbound_count}], statistics={}
+                columns=["c"],
+                rows=[{"c": links.get("inbound_count", 0)}],
+                statistics={},
             )
         if "-[r:LINKS_TO]->" in query:
             return CypherResult(
-                columns=["n", "r", "m"], rows=outbound_rows, statistics={}
+                columns=["n", "r", "m"], rows=links.get("outbound", []), statistics={}
             )
         if "<-[r:LINKS_TO]-" in query:
             return CypherResult(
-                columns=["n", "r", "m"], rows=inbound_rows, statistics={}
+                columns=["n", "r", "m"], rows=links.get("inbound", []), statistics={}
             )
-        return CypherResult(columns=["n", "r", "m"], rows=main_rows, statistics={})
+        # Pivot count queries (check before pivot rows - both share the arrow).
+        if "count(m) AS c" in query:
+            for desc, needle in _PIVOT_NEEDLE.items():
+                if needle in query:
+                    return CypherResult(
+                        columns=["c"], rows=[{"c": counts.get(desc, 0)}], statistics={}
+                    )
+            return CypherResult(columns=["c"], rows=[{"c": 0}], statistics={})
+        # Direct-fact rows.
+        for desc, needle in _DIRECT_FACT_NEEDLE.items():
+            if needle in query:
+                return CypherResult(
+                    columns=["h", "m"],
+                    rows=direct.get(desc, []),
+                    statistics={"executionTimeMs": 1},
+                )
+        # Pivot rows.
+        for desc, needle in _PIVOT_NEEDLE.items():
+            if needle in query:
+                return CypherResult(
+                    columns=["h", "m"], rows=pivot.get(desc, []), statistics={}
+                )
+        # Supplementary Note sources.
+        if "FEED_SOURCE" in query and "LISTED_IN" in query:
+            return CypherResult(
+                columns=["threatScore", "threatLevel", "feedName"],
+                rows=threat_rows or [],
+                statistics={},
+            )
+        if query.startswith("UNWIND ["):
+            return CypherResult(
+                columns=["name"],
+                rows=[{"name": n} for n in (variant_names or [])],
+                statistics={},
+            )
+        if 'STARTS WITH "SPF_"' in query:
+            return CypherResult(
+                columns=["spfType", "target"], rows=spf_rows or [], statistics={}
+            )
+        if "-[:HAS_PHONE]->" in query:
+            return CypherResult(columns=["phone"], rows=phone_rows or [], statistics={})
+        return CypherResult(columns=["h", "m"], rows=[], statistics={})
 
-    return _side_effect
+    return _se
 
 
-def test_links_to_supplementary_queries_fire_for_domain_name_seed(
+def test_domain_seed_fires_targeted_category_queries_not_broad(
     connector, helper, client
 ):
-    # Domain-Name seed triggers (in order): main + LINKS_TO outbound +
-    # LINKS_TO inbound + count_outbound + count_inbound. Plus the Phase B
-    # threat-context query also fires for Domain-Name. This is the wiring
-    # test for the supplementary LINKS_TO pass - match by query shape so
-    # the test stays resilient to other supplementary queries being added.
+    # AC #1: a Domain-Name seed drives category-specific directional queries,
+    # NOT the broad one-hop template. Assert the direct-fact + pivot + LINKS_TO
+    # shapes all fire and that no broad `type(r) <> "LINKS_TO"` query is sent.
     observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
     }
-    client.execute_cypher.side_effect = _links_to_side_effect(
-        main_rows=[],
-        outbound_rows=[],
-        inbound_rows=[],
-        outbound_count=0,
-        inbound_count=0,
-    )
+    client.execute_cypher.side_effect = _domain_side_effect()
     connector._process_message(_v7_payload(observable))
 
     queries = [c.args[0] for c in client.execute_cypher.call_args_list]
+    # No broad undirected one-hop query for the domain seed.
+    assert not [q for q in queries if 'type(r) <> "LINKS_TO"' in q]
+    # Every direct-fact and pivot category query was issued.
+    for needle in _DIRECT_FACT_NEEDLE.values():
+        assert any(needle in q for q in queries), needle
+    for needle in _PIVOT_NEEDLE.values():
+        assert any(needle in q for q in queries), needle
+    # Four LINKS_TO queries (outbound, inbound, count_outbound, count_inbound).
     links_to_queries = [q for q in queries if ":LINKS_TO" in q]
-    main_queries = [q for q in queries if 'type(r) <> "LINKS_TO"' in q]
-    # Four LINKS_TO queries (outbound, inbound, count_outbound, count_inbound)
-    # plus exactly one main query.
-    assert len(main_queries) == 1
     assert len(links_to_queries) == 4
-
-    outbound_match = [
-        q for q in links_to_queries if "-[r:LINKS_TO]->" in q and "count(m)" not in q
-    ]
-    inbound_match = [
-        q for q in links_to_queries if "<-[r:LINKS_TO]-" in q and "count(m)" not in q
-    ]
-    count_outbound = [
-        q for q in links_to_queries if "-[r:LINKS_TO]->" in q and "count(m)" in q
-    ]
-    count_inbound = [
-        q for q in links_to_queries if "<-[r:LINKS_TO]-" in q and "count(m)" in q
-    ]
-    assert len(outbound_match) == len(inbound_match) == 1
-    assert len(count_outbound) == len(count_inbound) == 1
-    # Cap (25) should be inlined into the directed queries - not LIMIT 50.
-    assert "LIMIT 25" in outbound_match[0]
-    assert "LIMIT 25" in inbound_match[0]
+    # SPF, WHOIS-phone, threat-feed and variant-existence passes all fire.
+    assert any('STARTS WITH "SPF_"' in q for q in queries)
+    assert any("-[:HAS_PHONE]->" in q for q in queries)
+    assert any("FEED_SOURCE" in q and "LISTED_IN" in q for q in queries)
+    assert any(q.startswith("UNWIND [") for q in queries)
 
 
 def test_links_to_outbound_edge_tagged_and_oriented_seed_to_neighbour(
     connector, helper, client
 ):
-    # Outbound LINKS_TO: seed → neighbour. Whisper returns the seed in `n`
-    # (source) and neighbour in `m` (target) - parser default keeps that
-    # orientation. The edge `description` must say "LINKS_TO outbound" so
-    # analysts can distinguish direction in OpenCTI.
+    # Outbound LINKS_TO: seed → neighbour. The edge `description` must say
+    # "links-to-outbound" (AC wording) so analysts can distinguish direction.
     observable = {
         "id": "domain-name--x",
         "entity_type": "Domain-Name",
         "value": "example.test",
     }
-    client.execute_cypher.side_effect = _links_to_side_effect(
-        main_rows=[],
-        outbound_rows=[
-            {
-                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.test"},
-                "r": {"type": "LINKS_TO"},
-                "m": {"nodeId": "out1", "label": "HOSTNAME", "name": "neighbour.test"},
-            }
-        ],
-        inbound_rows=[],
-        outbound_count=1,
-        inbound_count=0,
+    client.execute_cypher.side_effect = _domain_side_effect(
+        direct={},  # suppress the default A record so only the link edge remains
+        links={
+            "outbound": [
+                {
+                    "n": {
+                        "nodeId": "seed",
+                        "label": "HOSTNAME",
+                        "name": "example.test",
+                    },
+                    "r": {"type": "LINKS_TO"},
+                    "m": {
+                        "nodeId": "out1",
+                        "label": "HOSTNAME",
+                        "name": "neighbour.test",
+                    },
+                }
+            ],
+            "outbound_count": 1,
+        },
     )
     connector._process_message(_v7_payload(observable))
 
@@ -366,7 +441,7 @@ def test_links_to_outbound_edge_tagged_and_oriented_seed_to_neighbour(
     assert len(rels) == 1
     # Edge collapses to related-to with the direction tag in description.
     assert rels[0]["relationship_type"] == "related-to"
-    assert rels[0]["description"] == "LINKS_TO outbound"
+    assert rels[0]["description"] == "links-to-outbound"
 
 
 def test_links_to_inbound_edge_source_target_swapped(connector, helper, client):
@@ -381,18 +456,26 @@ def test_links_to_inbound_edge_source_target_swapped(connector, helper, client):
         "entity_type": "Domain-Name",
         "value": "example.test",
     }
-    client.execute_cypher.side_effect = _links_to_side_effect(
-        main_rows=[],
-        outbound_rows=[],
-        inbound_rows=[
-            {
-                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.test"},
-                "r": {"type": "LINKS_TO"},
-                "m": {"nodeId": "in1", "label": "HOSTNAME", "name": "referrer.test"},
-            }
-        ],
-        outbound_count=0,
-        inbound_count=1,
+    client.execute_cypher.side_effect = _domain_side_effect(
+        direct={},  # suppress the default A record so only the link edge remains
+        links={
+            "inbound": [
+                {
+                    "n": {
+                        "nodeId": "seed",
+                        "label": "HOSTNAME",
+                        "name": "example.test",
+                    },
+                    "r": {"type": "LINKS_TO"},
+                    "m": {
+                        "nodeId": "in1",
+                        "label": "HOSTNAME",
+                        "name": "referrer.test",
+                    },
+                }
+            ],
+            "inbound_count": 1,
+        },
     )
     connector._process_message(_v7_payload(observable))
 
@@ -400,7 +483,7 @@ def test_links_to_inbound_edge_source_target_swapped(connector, helper, client):
     rels = [o for o in bundle["objects"] if o["type"] == "relationship"]
     assert len(rels) == 1
     rel = rels[0]
-    assert rel["description"] == "LINKS_TO inbound"
+    assert rel["description"] == "links-to-inbound"
     # Resolve refs back to SCO values to assert direction.
     by_id = {o["id"]: o for o in bundle["objects"]}
     source = by_id[rel["source_ref"]]
@@ -419,18 +502,8 @@ def test_links_to_cap_overflow_emits_note_attached_to_seed(connector, helper, cl
         "entity_type": "Domain-Name",
         "value": "example.test",
     }
-    client.execute_cypher.side_effect = _links_to_side_effect(
-        main_rows=[
-            {
-                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.test"},
-                "r": {"type": "RESOLVES_TO"},
-                "m": {"nodeId": "ip1", "label": "IPV4", "name": "1.2.3.4"},
-            }
-        ],
-        outbound_rows=[],
-        inbound_rows=[],
-        outbound_count=42,
-        inbound_count=12_800_000,
+    client.execute_cypher.side_effect = _domain_side_effect(
+        links={"outbound_count": 42, "inbound_count": 12_800_000},
     )
     connector._process_message(_v7_payload(observable))
 
@@ -459,18 +532,8 @@ def test_links_to_no_overflow_omits_note(connector, helper, client):
         "entity_type": "Domain-Name",
         "value": "example.test",
     }
-    client.execute_cypher.side_effect = _links_to_side_effect(
-        main_rows=[
-            {
-                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.test"},
-                "r": {"type": "RESOLVES_TO"},
-                "m": {"nodeId": "ip1", "label": "IPV4", "name": "1.2.3.4"},
-            }
-        ],
-        outbound_rows=[],
-        inbound_rows=[],
-        outbound_count=3,
-        inbound_count=25,  # exactly at cap is fine - not overflowing
+    client.execute_cypher.side_effect = _domain_side_effect(
+        links={"outbound_count": 3, "inbound_count": 25},  # 25 == cap, not over
     )
     connector._process_message(_v7_payload(observable))
 
@@ -528,22 +591,12 @@ def test_links_to_supplementary_failure_does_not_fail_enrichment(
         "value": "example.test",
     }
 
-    main_result = CypherResult(
-        columns=["n", "r", "m"],
-        rows=[
-            {
-                "n": {"nodeId": "seed", "label": "HOSTNAME", "name": "example.test"},
-                "r": {"type": "RESOLVES_TO"},
-                "m": {"nodeId": "ip1", "label": "IPV4", "name": "1.2.3.4"},
-            }
-        ],
-        statistics={"executionTimeMs": 4},
-    )
+    base = _domain_side_effect()  # default A record keeps the seed bundle alive
 
     def _flaky(query, *_args, **_kwargs):
-        if "LINKS_TO" in query and 'type(r) <> "LINKS_TO"' not in query:
+        if ":LINKS_TO" in query:
             raise WhisperTransportError("connection reset")
-        return main_result
+        return base(query)
 
     client.execute_cypher.side_effect = _flaky
 
@@ -577,14 +630,6 @@ def _threat_context_side_effect(main_rows, threat_rows):
     return _side_effect
 
 
-def _seed_main_row(label="HOSTNAME", name="malware-traffic-analysis.net"):
-    return {
-        "n": {"nodeId": "seed", "label": label, "name": name},
-        "r": {"type": "RESOLVES_TO"},
-        "m": {"nodeId": "ip1", "label": "IPV4", "name": "1.2.3.4"},
-    }
-
-
 def test_threat_context_emits_note_with_score_level_flags_and_feeds(
     connector, helper, client
 ):
@@ -593,8 +638,8 @@ def test_threat_context_emits_note_with_score_level_flags_and_feeds(
         "entity_type": "Domain-Name",
         "value": "malware-traffic-analysis.net",
     }
-    client.execute_cypher.side_effect = _threat_context_side_effect(
-        main_rows=[_seed_main_row()],
+    client.execute_cypher.side_effect = _domain_side_effect(
+        seed_name="malware-traffic-analysis.net",
         threat_rows=[
             {
                 "threatScore": 3.169,
@@ -627,14 +672,17 @@ def test_threat_context_emits_note_with_score_level_flags_and_feeds(
     connector._process_message(_v7_payload(observable))
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    # AC #12: domain threat data ships under the "feed evidence" abstract with
+    # the not-an-authoritative-verdict caveat.
     threat_notes = [
         o
         for o in bundle["objects"]
-        if o["type"] == "note" and o.get("abstract") == "Whisper threat intelligence"
+        if o["type"] == "note" and o.get("abstract") == "Whisper threat feed evidence"
     ]
     assert len(threat_notes) == 1
     note = threat_notes[0]
     content = note["content"]
+    assert "not an authoritative verdict" in content
     assert "Threat assessment: MEDIUM (score 3.169)" in content
     # ISO-formatted timestamps for first/last seen - epoch ms 1779849886074
     # is 2026-05-27 UTC. Asserting the prefix exactly catches regressions
@@ -666,8 +714,8 @@ def test_threat_context_omits_note_when_no_threat_data(connector, helper, client
         "entity_type": "Domain-Name",
         "value": "boring.test",
     }
-    client.execute_cypher.side_effect = _threat_context_side_effect(
-        main_rows=[_seed_main_row(name="boring.test")],
+    client.execute_cypher.side_effect = _domain_side_effect(
+        seed_name="boring.test",
         threat_rows=[
             {
                 "threatScore": 0.0,
@@ -684,7 +732,7 @@ def test_threat_context_omits_note_when_no_threat_data(connector, helper, client
 
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     assert not any(
-        o.get("abstract") == "Whisper threat intelligence"
+        o.get("abstract") == "Whisper threat feed evidence"
         for o in bundle["objects"]
         if o["type"] == "note"
     )
@@ -1439,3 +1487,191 @@ def test_playbook_chain_with_no_stix_objects_returns_status_no_send(
     assert "playbook pass-through" in result
     assert "no stix_objects" in result
     helper.send_stix2_bundle.assert_not_called()
+
+
+# --- Targeted Domain-Name enrichment: acceptance-criteria coverage (#61) ----
+
+
+def _domain_obs(value="example.test"):
+    return {"id": "domain-name--x", "entity_type": "Domain-Name", "value": value}
+
+
+def test_domain_direct_facts_emit_stable_descriptions(connector, helper, client):
+    # AC #4: relationship descriptions are stable, human-readable category
+    # names (a-record, mx-server, name-server, registrar, whois-email) - not
+    # raw Whisper edge types. A/AAAA stay native resolves-to.
+    client.execute_cypher.side_effect = _domain_side_effect(
+        direct={
+            "a-record": [_hm_row("example.test", "seed", "ip-a", "IPV4", "1.2.3.4")],
+            "mx-server": [
+                _hm_row("example.test", "seed", "mx1", "HOSTNAME", "mx.example.test")
+            ],
+            "name-server": [
+                _hm_row("example.test", "seed", "ns1", "HOSTNAME", "ns.example.test")
+            ],
+            "registrar": [
+                _hm_row("example.test", "seed", "reg1", "REGISTRAR", "MarkMonitor Inc.")
+            ],
+            "whois-email": [
+                _hm_row("example.test", "seed", "em1", "EMAIL", "abuse@example.test")
+            ],
+        },
+    )
+    connector._process_message(_v7_payload(_domain_obs()))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    rels = [o for o in bundle["objects"] if o["type"] == "relationship"]
+    by_desc = {r.get("description"): r for r in rels}
+    assert {"a-record", "mx-server", "name-server", "registrar", "whois-email"} <= set(
+        by_desc
+    )
+    assert by_desc["a-record"]["relationship_type"] == "resolves-to"
+    assert by_desc["mx-server"]["relationship_type"] == "related-to"
+    assert by_desc["registrar"]["relationship_type"] == "related-to"
+
+
+def test_domain_spf_and_phone_summarized_as_notes(connector, helper, client):
+    # AC #5: data without a clean SCO (SPF policy, WHOIS phone) is summarized
+    # in Notes rather than silently dropped.
+    client.execute_cypher.side_effect = _domain_side_effect(
+        spf_rows=[
+            {"spfType": "SPF_INCLUDE", "target": "_spf.google.com"},
+            {"spfType": "SPF_IP", "target": "192.0.2.0/24"},
+        ],
+        phone_rows=[{"phone": "+1.5555550100"}],
+    )
+    connector._process_message(_v7_payload(_domain_obs()))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    abstracts = {o.get("abstract") for o in bundle["objects"] if o["type"] == "note"}
+    assert "Whisper SPF policy" in abstracts
+    assert "Whisper WHOIS phone contacts" in abstracts
+    spf = next(
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o["abstract"] == "Whisper SPF policy"
+    )
+    assert "_spf.google.com" in spf["content"]
+    phone = next(
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o["abstract"] == "Whisper WHOIS phone contacts"
+    )
+    assert "+1.5555550100" in phone["content"]
+
+
+def test_domain_pivot_overflow_note_reports_total_and_displayed(
+    connector, helper, client
+):
+    # AC #6: a capped pivot whose true count exceeds the cap produces a Note
+    # carrying the total and the displayed count.
+    client.execute_cypher.side_effect = _domain_side_effect(
+        counts={"subdomain": 20_957_725},
+    )
+    connector._process_message(_v7_payload(_domain_obs()))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    note = next(
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o.get("abstract") == "Whisper subdomain overflow"
+    )
+    assert "20,957,725" in note["content"]
+    assert "showing first 25" in note["content"]
+    assert "subdomains of example.test" in note["content"]
+
+
+def test_domain_lookalikes_note_lists_existing_variants(connector, helper, client):
+    # AC #15: registered lookalikes surface in a "Whisper domain variants"
+    # Note with method + confidence, flagged as existence-not-malice.
+    client.execute_cypher.side_effect = _domain_side_effect(
+        variant_names=["example.com"],  # a TLD-swap variant that "exists"
+    )
+    connector._process_message(_v7_payload(_domain_obs()))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    note = next(
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o.get("abstract") == "Whisper domain variants"
+    )
+    assert "example.com" in note["content"]
+    assert "tld-swap" in note["content"]
+    assert "not a malice verdict" in note["content"]
+
+
+def test_domain_enrichment_is_idempotent(connector, helper, client):
+    # AC #7: re-running the same enrichment produces the same STIX object IDs
+    # and no duplicates.
+    def fresh_side_effect():
+        return _domain_side_effect(
+            direct={
+                "a-record": [
+                    _hm_row("example.test", "seed", "ip-a", "IPV4", "1.2.3.4")
+                ],
+                "mx-server": [
+                    _hm_row(
+                        "example.test", "seed", "mx1", "HOSTNAME", "mx.example.test"
+                    )
+                ],
+            },
+            counts={"subdomain": 100},
+            threat_rows=[{"threatScore": 2.0, "threatLevel": "LOW", "feedName": None}],
+            variant_names=["example.com"],
+        )
+
+    client.execute_cypher.side_effect = fresh_side_effect()
+    connector._process_message(_v7_payload(_domain_obs()))
+    first = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    first_ids = sorted(o["id"] for o in first["objects"])
+
+    helper.send_stix2_bundle.reset_mock()
+    client.execute_cypher.side_effect = fresh_side_effect()
+    connector._process_message(_v7_payload(_domain_obs()))
+    second = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    second_ids = sorted(o["id"] for o in second["objects"])
+
+    assert first_ids == second_ids
+    # No duplicate IDs within a single bundle.
+    assert len(first_ids) == len(set(first_ids))
+
+
+def test_current_registrar_wins_when_node_is_also_previous_registrar(
+    connector, helper, client
+):
+    # Regression: a registrar that is BOTH the current registrar and a
+    # historical one is the SAME Whisper REGISTRAR node under HAS_REGISTRAR
+    # and PREV_REGISTRAR. Both emit a related-to edge to that node; the
+    # converter keys relationships off (source, target, type) - description
+    # excluded - so without dedup they collide and `previous-registrar`
+    # (emitted later) silently overwrites `registrar`. The connector must
+    # keep the current-state `registrar` description and still emit the
+    # genuinely-previous-only registrar separately.
+    shared = _hm_row(
+        "example.test", "seed", "reg-shared", "REGISTRAR", "registrar:MarkMonitor Inc."
+    )
+    prev_only = _hm_row(
+        "example.test", "seed", "reg-old", "REGISTRAR", "registrar:Gandi SAS"
+    )
+    client.execute_cypher.side_effect = _domain_side_effect(
+        direct={
+            "registrar": [shared],
+            "previous-registrar": [shared, prev_only],
+        },
+    )
+    connector._process_message(_v7_payload(_domain_obs()))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    rels = [o for o in bundle["objects"] if o["type"] == "relationship"]
+    by_target = {}
+    id_by_whisper = {  # identity SCO id is UUIDv5; map via name to assert target
+        o["name"]: o["id"] for o in bundle["objects"] if o["type"] == "identity"
+    }
+    for r in rels:
+        by_target.setdefault(r["target_ref"], []).append(r.get("description"))
+    shared_descs = by_target.get(id_by_whisper["MarkMonitor Inc."], [])
+    prev_descs = by_target.get(id_by_whisper["Gandi SAS"], [])
+    # Exactly one edge to the shared node, described as current registrar.
+    assert shared_descs == ["registrar"]
+    # The previous-only registrar still surfaces as previous-registrar.
+    assert prev_descs == ["previous-registrar"]
