@@ -202,8 +202,8 @@ check the
 **[releases page](https://github.com/whisper-sec/whisper-opencti/releases)**
 for available tags and pick one:
 
-- The entry tagged **Latest** is the current stable release (e.g. `v0.1.0`).
-- Entries tagged **Pre-release** are release candidates (e.g. `v0.2.0-rc1`).
+- The entry tagged **Latest** is the current stable release (e.g. `v1.0.0`).
+- Entries tagged **Pre-release** are release candidates (e.g. `v1.0.0-rc1`).
 
 Edit `WHISPER_CONNECTOR_VERSION` to that tag, then re-run `make qa-up`.
 
@@ -247,7 +247,7 @@ login`:
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u <your-github-username> --password-stdin
-docker pull ghcr.io/whisper-sec/whisper-opencti:v0.1.0
+docker pull ghcr.io/whisper-sec/whisper-opencti:v1.0.0
 ```
 
 Available tags (see the
@@ -256,14 +256,14 @@ the full list):
 
 | Tag | Use when |
 | --- | --- |
-| `vMAJOR.MINOR.PATCH` (e.g. `v0.1.0`) | Production — pin to a specific release. The entry tagged **Latest** on the releases page. |
+| `vMAJOR.MINOR.PATCH` (e.g. `v1.0.0`) | Production — pin to a specific release. The entry tagged **Latest** on the releases page. |
 | `vMAJOR.MINOR.PATCH-rcN` | Pre-release / release candidate. Entries tagged **Pre-release**. |
 | `latest` | Whatever was most recently tagged as a stable release. Only if you accept automatic updates on `docker pull`. |
 
 To confirm what's running:
 
 ```bash
-docker inspect ghcr.io/whisper-sec/whisper-opencti:v0.1.0 \
+docker inspect ghcr.io/whisper-sec/whisper-opencti:v1.0.0 \
   | jq -r '.[0].Config.Labels."org.opencontainers.image.version"'
 ```
 
