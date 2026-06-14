@@ -91,12 +91,38 @@ SCO IDs are deterministic per the STIX 2.1 spec: re-enriching `dns.google`
 always yields the same `domain-name--<uuid>` for it, so OpenCTI's worker
 upserts cleanly instead of creating duplicates.
 
+## Supplementary passes for Domain-Name seeds
+
+The main query above is now only the first of several Cypher calls the
+connector makes for a Domain-Name seed (issue #48 Phases A + B):
+
+- **`LINKS_TO` outbound + inbound** — two directed queries returning up to
+  25 hostnames each that the seed links to / is linked from. Outbound
+  edges are tagged `description="LINKS_TO outbound"`, inbound edges have
+  source/target swapped and tagged `description="LINKS_TO inbound"`.
+- **`LINKS_TO` count queries** — if either direction has more than 25
+  neighbours, a `LINKS_TO neighbour overflow` Note ships attached to the
+  seed (e.g. `Whisper found 320 inbound LINKS_TO neighbours; showing
+  first 25.`).
+- **Threat-context** — a single OPTIONAL-MATCH query that pulls the
+  seed's `threatScore`, `threatLevel`, 13 boolean flags
+  (`isMalware`, `isC2`, …), and every `FEED_SOURCE` the seed is
+  `LISTED_IN`. Produces a `Whisper threat intelligence` Note when
+  Whisper has any opinion at all on the seed (see
+  [scenario 3](./03-threat-intel-pivot.md)).
+
+All three supplementary passes are best-effort: a transport failure in
+any of them is logged but doesn't block the main bundle from shipping.
+
 ## What you should see in OpenCTI
 
 On the `dns.google` observable's **Knowledge → Relationships** tab, you'll see
 new entries for each related hostname/IP, with relationship type
 `resolves-to` (where applicable) or `related-to` (for the NAMESERVER_FOR
-edges).
+edges and the LINKS_TO outbound/inbound edges, distinguished by the
+`description` field). Under **Analyses → Notes** you'll see the threat
+intelligence summary if Whisper has any data on the seed, and the
+LINKS_TO overflow notice if applicable.
 
 ## Reproducing this scenario
 
