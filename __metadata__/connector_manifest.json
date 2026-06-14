@@ -1,0 +1,21 @@
+{
+  "title": "Whisper",
+  "slug": "whisper",
+  "description": "The Whisper graph is the internet's largest infrastructure graph - 7.39 billion nodes and 39 billion edges spanning DNS, BGP, WHOIS, GeoIP, web-link, email-infrastructure, and threat-intel data. This connector enriches OpenCTI observables (IPv4, IPv6, Domain-Name, Autonomous-System) with the relationship context Whisper has on them: resolving / linked / nameservering hostnames, announcing ASNs and prefixes, registrar and registered-organisation identities, country/city locations, threat-feed listings and threat scores, and LINKS_TO web-graph context.\n\nEach enrichment ships a STIX bundle with the appropriate SCOs and SDOs (Location, Identity, Autonomous-System), `related-to` relationships that preserve the original Whisper edge semantics in the `description` field, and analyst-visible Notes summarising LINKS_TO direction caps, the seed's Whisper threat assessment, IP-side network context (announcing AS, announced prefix, BGP flags), and any DNS records Whisper returned that don't conform to RFC 1035.",
+  "short_description": "Enrich IP, domain and AS observables with relationship context from the Whisper graph: DNS, BGP, WHOIS, threat-feed listings, and ASN/prefix infrastructure.",
+  "logo": "__metadata__/logo.png",
+  "use_cases": [
+    "Enrichment & Analysis"
+  ],
+  "verified": false,
+  "last_verified_date": null,
+  "playbook_supported": true,
+  "max_confidence_level": 75,
+  "support_version": ">=7.260604.0",
+  "subscription_link": "https://whisper.security",
+  "source_code": "https://github.com/whisper-sec/whisper-opencti",
+  "manager_supported": false,
+  "container_version": "rolling",
+  "container_image": "ghcr.io/whisper-sec/whisper-opencti",
+  "container_type": "INTERNAL_ENRICHMENT"
+}

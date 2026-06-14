@@ -44,7 +44,7 @@ dev-clean: ## Stop the dev stack AND remove volumes (fresh state)
 qa-up: _check-env ## Bring up the QA stack (validates the published GHCR image end-to-end)
 	$(COMPOSE_QA) up -d
 	@echo ""
-	@echo "QA stack: connector image = $${WHISPER_CONNECTOR_IMAGE:-ghcr.io/whisper-sec/whisper-opencti:v0.1.0-rc2}"
+	@echo "QA stack: connector version = $$(grep '^WHISPER_CONNECTOR_VERSION=' .env | cut -d= -f2)"
 	@echo "OpenCTI will be available at $$(grep OPENCTI_BASE_URL .env | cut -d= -f2)"
 	@echo "Login: $$(grep OPENCTI_ADMIN_EMAIL .env | cut -d= -f2) / $$(grep OPENCTI_ADMIN_PASSWORD .env | cut -d= -f2)"
 	@echo "Note: cannot run alongside dev stack - both bind the same OPENCTI_PORT. Run \`make dev-down\` first if needed."
@@ -65,9 +65,24 @@ qa-status: ## Show status of QA stack services
 qa-clean: ## Stop the QA stack AND remove volumes (fresh state)
 	$(COMPOSE_QA) down -v
 
-test: ## Run unit tests (assumes `pip install -r requirements.txt -r requirements-dev.txt`)
+test: ## Run unit tests (assumes `pip install -r tests/test-requirements.txt`)
 	pytest
 
-lint: ## Run ruff lint + format check
-	ruff check src/ tests/
-	ruff format --check src/ tests/
+# Lint + format toolchain matches OpenCTI-Platform/connectors upstream
+# (see shared/pylint_plugins/check_stix_plugin/ for the vendored STIX-ID
+# generator plugin). The pylint check set mirrors upstream's lint.yml -
+# `--disable=all --enable=no_generated_id_stix,no-value-for-parameter,unused-import`
+# - not a full style sweep.
+lint: ## Format check (isort + black) + flake8 + narrow pylint (vendored STIX-ID plugin)
+	isort --profile black --line-length 88 --check-only --diff .
+	black --check --diff .
+	flake8 --ignore=E,W .
+	cd shared/pylint_plugins/check_stix_plugin && \
+	  PYTHONPATH=. pylint ../../../src ../../../tests \
+	    --disable=all \
+	    --enable=no_generated_id_stix,no-value-for-parameter,unused-import \
+	    --load-plugins linter_stix_id_generator
+
+format: ## Apply isort + black formatting in place
+	isort --profile black --line-length 88 .
+	black .
