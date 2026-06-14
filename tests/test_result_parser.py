@@ -528,3 +528,21 @@ def test_parse_registrar_without_prefix_kept_as_is():
     rows = [{"n": {"nodeId": "1", "label": "REGISTRAR", "name": "Some Registrar Inc"}}]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["properties"]["name"] == "Some Registrar Inc"
+
+
+def test_parse_registrar_resolves_iana_id_to_name():
+    # Whisper stores the CURRENT registrar as an opaque `iana:<id>` node.
+    # The parser resolves it to the IANA registrar name (issue #61) so the
+    # Identity SDO is analyst-readable instead of "iana:292".
+    rows = [{"n": {"nodeId": "1", "label": "REGISTRAR", "name": "iana:292"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["type"] == "identity"
+    assert nodes[0]["properties"]["name"] == "MarkMonitor Inc."
+
+
+def test_parse_registrar_unknown_iana_id_falls_back_readable():
+    # An IANA ID not in the vendored table (new/unknown registrar) still
+    # gets a readable label rather than the raw "iana:..." string.
+    rows = [{"n": {"nodeId": "1", "label": "REGISTRAR", "name": "iana:99999"}}]
+    nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
+    assert nodes[0]["properties"]["name"] == "IANA Registrar #99999"

@@ -12,15 +12,26 @@ from src.connector.exceptions import (
 )
 from src.connector.queries import (
     DEFAULT_LIMIT,
+    DOMAIN_PIVOT_CAP,
     LINKS_TO_CAP,
     THREAT_FLAG_FIELDS,
+    generate_domain_variants,
+    get_domain_direct_fact_queries,
+    get_domain_pivot_queries,
     get_links_to_queries,
     get_network_context_query,
     get_query_for_entity_type,
+    get_spf_policy_query,
     get_threat_context_query,
+    get_variant_existence_query,
+    get_whois_phone_query,
     supported_entity_types,
 )
-from src.connector.result_parser import collect_dropped_hostnames, parse_cypher_result
+from src.connector.result_parser import (
+    collect_dropped_hostnames,
+    parse_cypher_result,
+    translate_node_cell,
+)
 from src.connector.settings import WhisperSettings
 from src.connector.whisper_client import WhisperClient
 
@@ -239,7 +250,7 @@ class WhisperConnector:
                         edge["target_id"],
                         edge["source_id"],
                     )
-                edge["properties"] = {"description": f"LINKS_TO {direction}"}
+                edge["properties"] = {"description": f"links-to-{direction}"}
             extra_nodes.extend(dir_nodes)
             extra_edges.extend(dir_edges)
 
@@ -367,9 +378,16 @@ class WhisperConnector:
         entity_type: str,
         entity_value: str,
         observable: dict,
+        abstract: str = "Whisper threat intelligence",
+        caveat: str | None = None,
     ) -> list[stix2.Note]:
         """Return a list with one ``stix2.Note`` if Whisper has threat-feed
         evidence for the seed, otherwise an empty list.
+
+        ``abstract`` and ``caveat`` let the Domain-Name path (issue #61 AC #12)
+        render the same threat data under the abstract ``Whisper threat feed
+        evidence`` with the "score is not an authoritative verdict" caveat,
+        while IP seeds keep the original ``Whisper threat intelligence`` Note.
 
         Skips when:
         - the entity type doesn't carry threat properties (ASN today),
@@ -421,12 +439,14 @@ class WhisperConnector:
         content = self._format_threat_content(first_row, feeds)
         if not content:
             return []
+        if caveat:
+            content = f"{content}\n\n{caveat}"
 
         return [
             build_note(
                 seed_stix_id=seed_stix_id,
                 content=content,
-                abstract="Whisper threat intelligence",
+                abstract=abstract,
             )
         ]
 
@@ -596,6 +616,340 @@ class WhisperConnector:
 
         return extra_nodes, extra_edges, notes
 
+    # STIX relationship type per direct-fact category. A/AAAA are genuine DNS
+    # resolutions → "resolves-to" (keeps idempotency with the IP path's
+    # RESOLVES_TO edges). Everything else collapses to "related-to" with the
+    # category as the description, since OpenCTI's fixed SRO vocabulary
+    # rejects custom relationship types (issue #31).
+    _DOMAIN_FACT_REL_TYPE: dict[str, str] = {
+        "a-record": "resolves-to",
+        "aaaa-record": "resolves-to",
+    }
+
+    # Human-readable phrasing for each capped-pivot overflow Note (AC #61).
+    _PIVOT_OVERFLOW_PHRASE: dict[str, str] = {
+        "nameserver-for-domain": "domains for which {seed} is a nameserver",
+        "mail-server-for-domain": "domains for which {seed} is a mail server",
+        "subdomain": "subdomains of {seed}",
+        "cname-pointing-to-seed": "domains with a CNAME pointing to {seed}",
+    }
+
+    @staticmethod
+    def _stat_ms(result: object) -> int:
+        """Best-effort executionTimeMs from a CypherResult, 0 if unavailable."""
+        try:
+            v = result.statistics.get("executionTimeMs", 0)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            return 0
+        return int(v) if isinstance(v, int | float) else 0
+
+    @staticmethod
+    def _format_spf_content(rows: list) -> str:
+        """Render the SPF-policy Note grouped by mechanism (include/ip4/a/…)."""
+        mechanisms: dict[str, list[str]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            spf_type = row.get("spfType")
+            target = row.get("target")
+            if not spf_type or not target:
+                continue
+            mechanisms.setdefault(str(spf_type), []).append(str(target))
+        if not mechanisms:
+            return ""
+        lines = ["Whisper SPF policy mechanisms for this domain:"]
+        for spf_type in sorted(mechanisms):
+            targets = sorted(set(mechanisms[spf_type]))
+            shown = targets[:20]
+            label = spf_type.replace("SPF_", "").lower()
+            suffix = (
+                f"  (+{len(targets) - len(shown)} more)"
+                if len(targets) > len(shown)
+                else ""
+            )
+            lines.append(f"  {label}: {', '.join(shown)}{suffix}")
+        return "\n".join(lines)
+
+    def _collect_domain_variants(
+        self,
+        entity_value: str,
+        seed_stix_id: str | None,
+    ) -> list[stix2.Note]:
+        """Generate typosquat candidates, confirm which exist in Whisper, and
+        emit a ``Whisper domain variants`` Note (issue #61 AC #15).
+
+        Existence in the graph means registered/observed, NOT malicious - the
+        Note says so. Best-effort: a query failure yields no Note.
+        """
+        if not seed_stix_id:
+            return []
+        candidates = generate_domain_variants(entity_value)
+        if not candidates:
+            return []
+        by_name = {c["variant"]: c for c in candidates}
+        query = get_variant_existence_query(list(by_name.keys()))
+        if not query:
+            return []
+        try:
+            result = self.client.execute_cypher(query)
+        except WhisperClientError as exc:
+            self.helper.connector_logger.error(
+                "Whisper variant-existence query failed (continuing)",
+                {"value": entity_value, "error": str(exc)},
+            )
+            return []
+        existing = sorted(
+            {
+                row.get("name")
+                for row in result.rows
+                if isinstance(row, dict) and row.get("name") in by_name
+            }
+        )
+        if not existing:
+            return []
+        lines = [
+            "Whisper found the following registered lookalike domains "
+            "(existence only - registration is not a malice verdict; pivot "
+            "each through threat intel before acting):",
+            "",
+        ]
+        for name in existing:
+            info = by_name[name]
+            lines.append(
+                f"  - {name}  (method: {info['method']}, "
+                f"confidence: {info['confidence']:.1f})"
+            )
+        return [
+            build_note(
+                seed_stix_id=seed_stix_id,
+                content="\n".join(lines),
+                abstract="Whisper domain variants",
+            )
+        ]
+
+    def _collect_domain_enrichment(
+        self,
+        entity_value: str,
+        observable: dict,
+    ) -> tuple[list[dict], list[dict], list[stix2.Note], int]:
+        """Run the targeted directional category queries for a Domain-Name seed.
+
+        Returns ``(nodes, edges, notes, total_execution_ms)``. Each category is
+        independently best-effort - one failing query logs and is skipped
+        rather than sinking the whole enrichment.
+        """
+        nodes_by_id: dict[str, dict] = {}
+        edges: list[dict] = []
+        seen_edge_keys: set[tuple[str, str, str]] = set()
+        notes: list[stix2.Note] = []
+        dropped: list[dict] = []
+        total_ms = 0
+        seed_stix_id = self._seed_stix_id("Domain-Name", entity_value, observable)
+
+        def add_node(translated: dict | None) -> None:
+            if translated and translated["id"] not in nodes_by_id:
+                nodes_by_id[translated["id"]] = translated
+
+        def add_edge(
+            source_id: str, target_id: str, rel_type: str, description: str
+        ) -> None:
+            # The converter keys relationships off (source, target, type) -
+            # description is intentionally excluded so re-enrichment is
+            # idempotent. That means two categories pointing a `related-to`
+            # edge at the SAME node (e.g. a registrar that is both the current
+            # `registrar` and a `previous-registrar`) would collide and the
+            # last writer's description would silently win. Dedupe here with
+            # first-writer-wins: categories are processed in precedence order
+            # (direct facts before pivots; within direct facts `registrar`
+            # before `previous-registrar`), so the more specific/current
+            # description is kept. This ordering is load-bearing - see
+            # DOMAIN_DIRECT_FACT_QUERIES.
+            key = (source_id, target_id, rel_type)
+            if key in seen_edge_keys:
+                return
+            seen_edge_keys.add(key)
+            edges.append(
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "type": rel_type,
+                    "properties": {"description": description},
+                }
+            )
+
+        def run(query: str, category: str) -> object | None:
+            nonlocal total_ms
+            try:
+                result = self.client.execute_cypher(query)
+            except WhisperClientError as exc:
+                self.helper.connector_logger.error(
+                    "Whisper domain query failed (continuing)",
+                    {"category": category, "value": entity_value, "error": str(exc)},
+                )
+                return None
+            total_ms += self._stat_ms(result)
+            return result
+
+        # --- Direct facts: deterministic seed -> neighbour relationships. ---
+        for desc, query in get_domain_direct_fact_queries(entity_value).items():
+            result = run(query, desc)
+            if result is None:
+                continue
+            dropped.extend(collect_dropped_hostnames(result))
+            rel_type = self._DOMAIN_FACT_REL_TYPE.get(desc, "related-to")
+            for row in result.rows:
+                if not isinstance(row, dict):
+                    continue
+                h = translate_node_cell(row.get("h"))
+                m = translate_node_cell(row.get("m"))
+                if h is None or m is None:
+                    continue
+                add_node(h)
+                add_node(m)
+                add_edge(h["id"], m["id"], rel_type, desc)
+
+        # --- Capped pivots: capped relationships + overflow Note per category.
+        for desc, q in get_domain_pivot_queries(entity_value).items():
+            result = run(q["rows"], desc)
+            if result is None:
+                continue
+            dropped.extend(collect_dropped_hostnames(result))
+            for row in result.rows:
+                if not isinstance(row, dict):
+                    continue
+                h = translate_node_cell(row.get("h"))
+                m = translate_node_cell(row.get("m"))
+                if h is None or m is None:
+                    continue
+                add_node(h)
+                add_node(m)
+                add_edge(h["id"], m["id"], "related-to", desc)
+            count_result = run(q["count"], f"{desc}-count")
+            count = (
+                count_result.rows[0].get("c")
+                if count_result
+                and count_result.rows
+                and isinstance(count_result.rows[0], dict)
+                else 0
+            )
+            if seed_stix_id and isinstance(count, int) and count > DOMAIN_PIVOT_CAP:
+                phrase = self._PIVOT_OVERFLOW_PHRASE[desc].format(seed=entity_value)
+                notes.append(
+                    build_note(
+                        seed_stix_id=seed_stix_id,
+                        content=(
+                            f"Whisper found {count:,} {phrase}; "
+                            f"showing first {DOMAIN_PIVOT_CAP}."
+                        ),
+                        abstract=f"Whisper {desc} overflow",
+                    )
+                )
+
+        # --- Outbound/inbound web links (existing collector, AC descriptions).
+        try:
+            lt_nodes, lt_edges, lt_notes = self._collect_links_to(
+                "Domain-Name", entity_value, observable
+            )
+        except WhisperClientError as exc:
+            self.helper.connector_logger.error(
+                "Whisper LINKS_TO supplementary query failed (continuing)",
+                {"value": entity_value, "error": str(exc)},
+            )
+            lt_nodes, lt_edges, lt_notes = [], [], []
+        for node in lt_nodes:
+            add_node(node)
+        for lt_edge in lt_edges:
+            add_edge(
+                lt_edge["source_id"],
+                lt_edge["target_id"],
+                lt_edge["type"],
+                (lt_edge.get("properties") or {}).get("description", ""),
+            )
+        notes.extend(lt_notes)
+
+        # --- SPF policy Note. ---
+        spf_result = run(get_spf_policy_query(entity_value), "spf")
+        if seed_stix_id and spf_result and spf_result.rows:
+            content = self._format_spf_content(spf_result.rows)
+            if content:
+                notes.append(
+                    build_note(
+                        seed_stix_id=seed_stix_id,
+                        content=content,
+                        abstract="Whisper SPF policy",
+                    )
+                )
+
+        # --- WHOIS phone Note. ---
+        phone_result = run(get_whois_phone_query(entity_value), "whois-phone")
+        if seed_stix_id and phone_result and phone_result.rows:
+            phones = sorted(
+                {
+                    str(row.get("phone"))
+                    for row in phone_result.rows
+                    if isinstance(row, dict) and row.get("phone")
+                }
+            )
+            if phones:
+                content = "Whisper WHOIS phone contacts for this domain:\n" + "\n".join(
+                    f"  - {p}" for p in phones
+                )
+                notes.append(
+                    build_note(
+                        seed_stix_id=seed_stix_id,
+                        content=content,
+                        abstract="Whisper WHOIS phone contacts",
+                    )
+                )
+
+        # --- Threat feed evidence Note (AC #12: renamed abstract + caveat). ---
+        try:
+            notes.extend(
+                self._collect_threat_context(
+                    "Domain-Name",
+                    entity_value,
+                    observable,
+                    abstract="Whisper threat feed evidence",
+                    caveat=(
+                        "Note: the Whisper threat score is supporting evidence, "
+                        "not an authoritative verdict - corroborate before acting."
+                    ),
+                )
+            )
+        except WhisperClientError as exc:
+            self.helper.connector_logger.error(
+                "Whisper threat-context query failed (continuing)",
+                {"value": entity_value, "error": str(exc)},
+            )
+
+        # --- Lookalikes Note. ---
+        notes.extend(self._collect_domain_variants(entity_value, seed_stix_id))
+
+        # --- Dropped non-RFC-1035 DNS records Note (aggregated across queries).
+        if dropped and seed_stix_id:
+            notes.append(
+                build_note(
+                    seed_stix_id=seed_stix_id,
+                    content=self._format_dropped_hostnames_content(dropped),
+                    abstract="Whisper dropped non-RFC-1035 DNS records",
+                )
+            )
+
+        return list(nodes_by_id.values()), edges, notes, total_ms
+
+    def _enrich_domain(self, observable: dict, entity_value: str) -> str:
+        """Targeted Domain-Name enrichment entrypoint (issue #61)."""
+        self.helper.connector_logger.info(
+            "Enriching domain via Whisper (targeted)",
+            {"entity_id": observable.get("id"), "value": entity_value},
+        )
+        nodes, edges, notes, total_ms = self._collect_domain_enrichment(
+            entity_value, observable
+        )
+        return self._ship_enrichment(
+            observable, entity_value, nodes, edges, notes, total_ms
+        )
+
     def _enrich_observable(self, observable: dict) -> str:
         entity_type = observable.get("entity_type")
         entity_value = observable.get("observable_value") or observable.get("value")
@@ -611,6 +965,12 @@ class WhisperConnector:
 
         if not entity_value:
             return f"observable {observable.get('id')!r} has no value to enrich"
+
+        # Domain-Name uses targeted directional category queries rather than
+        # the broad one-hop template (issue #61) - deterministic output, stable
+        # relationship descriptions. IP/ASN seeds keep the broad path below.
+        if entity_type == "Domain-Name":
+            return self._enrich_domain(observable, entity_value)
 
         query = get_query_for_entity_type(
             entity_type, value=entity_value, limit=DEFAULT_LIMIT
@@ -713,6 +1073,26 @@ class WhisperConnector:
                     seen_node_ids.add(new_node["id"])
             edges.extend(extra_edges)
 
+        elapsed = result.statistics.get("executionTimeMs", "?")
+        return self._ship_enrichment(
+            observable, entity_value, nodes, edges, extra_notes, elapsed
+        )
+
+    def _ship_enrichment(
+        self,
+        observable: dict,
+        entity_value: str,
+        nodes: list[dict],
+        edges: list[dict],
+        extra_notes: list,
+        elapsed: object,
+    ) -> str:
+        """Shared bundle-build / send / status tail for both enrichment paths.
+
+        Applies the "don't ship a seed-only bundle with no new context" guard,
+        builds the STIX bundle, ships it via the helper, and returns the
+        work-item status string shown in the OpenCTI UI.
+        """
         if not nodes and not extra_notes:
             self.helper.connector_logger.info(
                 "No Whisper data for entity",
@@ -757,7 +1137,6 @@ class WhisperConnector:
         # ``helper.stix2_create_bundle`` consumes the object list.
         stix_bundle = self.helper.stix2_create_bundle(objects)
         self.helper.send_stix2_bundle(stix_bundle)
-        elapsed = result.statistics.get("executionTimeMs", "?")
         self.helper.connector_logger.info(
             "Sent STIX bundle",
             {

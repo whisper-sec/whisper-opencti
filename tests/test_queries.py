@@ -2,13 +2,20 @@ import pytest
 
 from src.connector.queries import (
     DEFAULT_LIMIT,
+    DOMAIN_PIVOT_CAP,
     NETWORK_CONTEXT_LIMIT,
     QUERIES,
     THREAT_FEED_LIMIT,
     THREAT_FLAG_FIELDS,
+    generate_domain_variants,
+    get_domain_direct_fact_queries,
+    get_domain_pivot_queries,
     get_network_context_query,
     get_query_for_entity_type,
+    get_spf_policy_query,
     get_threat_context_query,
+    get_variant_existence_query,
+    get_whois_phone_query,
     supported_entity_types,
 )
 
@@ -40,17 +47,21 @@ def test_get_query_uses_default_limit_when_not_supplied():
 def test_get_query_json_escapes_value_for_safety():
     # A quote in the value must not break out of the Cypher string literal.
     q = get_query_for_entity_type(
-        "Domain-Name", value='evil"; DROP-something // ', limit=1
+        "IPv4-Addr", value='evil"; DROP-something // ', limit=1
     )
     # json.dumps escapes the inner double-quote with a backslash.
     assert '"evil\\"; DROP-something // "' in q
 
 
-def test_get_query_returns_a_query_for_every_supported_type():
-    for entity_type in supported_entity_types():
+def test_get_query_returns_a_query_for_every_broad_query_type():
+    # Domain-Name no longer rides the broad one-hop template (issue #61 -
+    # it uses targeted directional builders), so the broad-query contract
+    # covers IP/ASN seeds only.
+    for entity_type in QUERIES:
         q = get_query_for_entity_type(entity_type, value="example", limit=10)
         assert q is not None
         assert "$value" not in q and "$limit" not in q
+    assert get_query_for_entity_type("Domain-Name", value="example.test") is None
 
 
 def test_get_query_rejects_zero_or_negative_limit():
@@ -73,8 +84,9 @@ def test_get_query_returns_none_for_unsupported_types():
 def test_query_templates_anchor_on_whisper_uppercase_labels():
     assert ":IPV4" in QUERIES["IPv4-Addr"]
     assert ":IPV6" in QUERIES["IPv6-Addr"]
-    assert ":HOSTNAME" in QUERIES["Domain-Name"]
     assert ":ASN" in QUERIES["Autonomous-System"]
+    # Domain-Name intentionally absent from the broad QUERIES map (issue #61).
+    assert "Domain-Name" not in QUERIES
 
 
 def test_get_query_handles_autonomous_system_value():
@@ -217,3 +229,99 @@ def test_network_context_query_rejects_zero_or_empty():
 def test_network_context_query_unsupported_type_returns_none():
     for entity_type in ("Url", "StixFile", "Email-Addr", ""):
         assert get_network_context_query(entity_type, value="x") is None
+
+
+# --- Targeted Domain-Name enrichment builders (issue #61) ------------------
+
+
+def test_domain_direct_fact_queries_cover_all_categories():
+    q = get_domain_direct_fact_queries("example.test")
+    assert set(q) == {
+        "a-record",
+        "aaaa-record",
+        "cname",
+        "name-server",
+        "mx-server",
+        "registrar",
+        "previous-registrar",
+        "registered-by",
+        "whois-email",
+    }
+    # Value inlined, no placeholders left, anchored on HOSTNAME.
+    for cypher in q.values():
+        assert '"example.test"' in cypher
+        assert "$value" not in cypher and "$limit" not in cypher
+        assert ":HOSTNAME" in cypher
+
+
+def test_domain_direct_fact_mx_and_ns_use_inbound_direction():
+    # AC test #2/#3: a domain's OWN MX/NS records are the inbound direction
+    # (the NS/MX host points AT the seed). Forward direction would wrongly
+    # return domains the seed is an NS/MX *for*.
+    q = get_domain_direct_fact_queries("example.test")
+    assert "<-[:MAIL_FOR]-(m:HOSTNAME)" in q["mx-server"]
+    assert "<-[:NAMESERVER_FOR]-(m:HOSTNAME)" in q["name-server"]
+    # A/AAAA resolve forward; registered-by/registrar point outward.
+    assert "-[:RESOLVES_TO]->(m:IPV4)" in q["a-record"]
+    assert "-[:RESOLVES_TO]->(m:IPV6)" in q["aaaa-record"]
+    assert "-[:REGISTERED_BY]->(m:ORGANIZATION)" in q["registered-by"]
+
+
+def test_domain_pivot_queries_use_forward_and_count():
+    q = get_domain_pivot_queries("example.test")
+    assert set(q) == {
+        "nameserver-for-domain",
+        "mail-server-for-domain",
+        "subdomain",
+        "cname-pointing-to-seed",
+    }
+    # Pivots are the OPPOSITE direction of the same-named direct facts.
+    assert "-[:MAIL_FOR]->(m:HOSTNAME)" in q["mail-server-for-domain"]["rows"]
+    assert "-[:NAMESERVER_FOR]->(m:HOSTNAME)" in q["nameserver-for-domain"]["rows"]
+    assert "<-[:CHILD_OF]-(m:HOSTNAME)" in q["subdomain"]["rows"]
+    assert "<-[:ALIAS_OF]-(m:HOSTNAME)" in q["cname-pointing-to-seed"]["rows"]
+    # Each pivot carries a count query and caps its rows.
+    for spec in q.values():
+        assert "count(m) AS c" in spec["count"]
+        assert f"LIMIT {DOMAIN_PIVOT_CAP}" in spec["rows"]
+
+
+def test_spf_and_whois_phone_queries_inline_value_and_limit():
+    spf = get_spf_policy_query("example.test", limit=10)
+    assert 'STARTS WITH "SPF_"' in spf
+    assert "LIMIT 10" in spf and "$value" not in spf
+    phone = get_whois_phone_query("example.test", limit=5)
+    assert "-[:HAS_PHONE]->" in phone
+    assert "LIMIT 5" in phone and "$value" not in phone
+
+
+def test_generate_domain_variants_produces_methods_and_confidence():
+    variants = generate_domain_variants("paypal.com")
+    assert variants  # non-empty
+    by_variant = {v["variant"]: v for v in variants}
+    # Input itself is never a candidate.
+    assert "paypal.com" not in by_variant
+    # Every entry has a method and a 0-1 confidence.
+    for v in variants:
+        assert v["method"]
+        assert 0.0 <= v["confidence"] <= 1.0
+    # A known omission ("paypa.com") and a TLD-swap ("paypal.net") appear.
+    assert "paypa.com" in by_variant
+    assert "paypal.net" in by_variant
+    assert by_variant["paypal.net"]["method"] == "tld-swap"
+
+
+def test_generate_domain_variants_is_bounded_and_handles_bare_input():
+    assert generate_domain_variants("localhost") == []  # no dot
+    assert generate_domain_variants("") == []
+    capped = generate_domain_variants("example.com", cap=5)
+    assert len(capped) <= 5
+
+
+def test_variant_existence_query_unwinds_candidates_or_none():
+    assert get_variant_existence_query([]) is None
+    q = get_variant_existence_query(["a.com", "b.com"])
+    assert q is not None
+    assert q.startswith("UNWIND [")
+    assert '"a.com"' in q and '"b.com"' in q
+    assert "MATCH (h:HOSTNAME {name: candidate})" in q
