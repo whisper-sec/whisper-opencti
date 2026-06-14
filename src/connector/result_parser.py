@@ -23,6 +23,7 @@ import ipaddress
 import logging
 import re
 
+from src.connector.iana_registrars import resolve_registrar_name
 from src.connector.whisper_client import CypherResult
 
 logger = logging.getLogger(__name__)
@@ -194,6 +195,22 @@ def parse_cypher_result(result: CypherResult) -> tuple[list[dict], list[dict]]:
     return list(nodes_by_id.values()), edges
 
 
+def translate_node_cell(cell: dict) -> dict | None:
+    """Public wrapper around the node translator.
+
+    The targeted Domain-Name enrichment path (issue #61) builds STIX
+    relationships explicitly rather than inferring them from row column
+    order, but still needs the same node normalization the main parser
+    applies — IP-shaped HOSTNAME reclassification, RFC 1035 filtering,
+    REGISTRAR/ORGANIZATION → Identity cleanup, ASN parsing. Returns the
+    normalized ``{"id", "type", "properties"}`` dict, or ``None`` if the
+    cell isn't a usable/mappable node.
+    """
+    if not isinstance(cell, dict) or "nodeId" not in cell:
+        return None
+    return _translate_node(cell)
+
+
 def _translate_node(cell: dict) -> dict | None:
     label = cell.get("label")
     name = cell.get("name")
@@ -258,8 +275,12 @@ def _translate_node(cell: dict) -> dict | None:
         # Whisper edge type (e.g. REGISTERED_BY) so analysts can tell a
         # registrar apart from an owning organization.
         cleaned = str(name)
-        if label == "REGISTRAR" and cleaned.lower().startswith("registrar:"):
-            cleaned = cleaned[len("registrar:") :].strip()
+        if label == "REGISTRAR":
+            # Whisper REGISTRAR names come in two shapes: ``iana:<id>`` (the
+            # current registrar, an opaque IANA ID) and ``registrar:<name>``
+            # (historical, raw WHOIS string). Resolve both to a display name —
+            # the IANA ID via the vendored lookup (issue #61).
+            cleaned = resolve_registrar_name(cleaned)
         if not cleaned:
             return None
         props["name"] = cleaned
