@@ -1,3 +1,17 @@
-pytest==8.3.4
-responses==0.25.7
-ruff==0.6.9
+# Lint + format toolchain - matches the OpenCTI-Platform/connectors upstream
+# CI (ci-requirements.txt + lint.yml + shared/pylint_plugins/check_stix_plugin/
+# requirements.txt).
+#
+# Test-runtime deps live in tests/test-requirements.txt - split so `make lint`
+# doesn't drag pytest + responses into the lint venv.
+#
+# Note on isort: upstream CI uses isort==7.0.0 (in a separate venv from
+# pylint). pylint 3.3.1 declares `isort<6`, so installing both into one venv
+# requires isort 5.x. We pin isort==5.13.2 (latest 5.x) for the single-venv
+# local dev experience; black-profile output is functionally identical to
+# 7.0.0 for our import shapes. CI mirrors upstream's split-venv pattern.
+astroid==3.3.5
+black==26.3.1
+flake8>=7,<8
+isort==5.13.2
+pylint==3.3.1
