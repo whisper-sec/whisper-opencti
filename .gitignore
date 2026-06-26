@@ -46,4 +46,6 @@ config.yml
 *.log
 logs/
 
-# local developer tooling
+# local developer tooling - ignore local settings, but share team agents/skills
+!the local tooling/agents/
+!the local tooling/skills/
