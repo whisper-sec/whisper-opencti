@@ -45,5 +45,3 @@ config.yml
 # Logs
 *.log
 logs/
-
-# local developer tooling
