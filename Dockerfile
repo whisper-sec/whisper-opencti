@@ -23,8 +23,11 @@ WORKDIR /opt/connector
 # Copy just the requirements first (from src/, per the upstream template
 # layout) so the dependency layer caches independently of source changes.
 COPY src/requirements.txt ./
+# git is needed to install connectors-sdk from its git+https requirement
+# (it ships from the OpenCTI-Platform/connectors monorepo, not PyPI). It lives
+# in the throwaway .build-deps package so it isn't in the final image.
 RUN apk add --no-cache libmagic libffi && \
-    apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev && \
+    apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev git && \
     pip install --no-cache-dir -r requirements.txt && \
     apk del .build-deps
 
