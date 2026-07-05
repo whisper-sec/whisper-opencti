@@ -61,9 +61,9 @@ returned that don't conform to RFC 1035.
 
 | Component | Version |
 | --- | --- |
-| OpenCTI platform | **7.260604.0** (verified). The platform and `pycti` are now released in lockstep on the same CalVer string — bumping one without the other will fail at connector registration time (mismatched GraphQL schema). |
+| OpenCTI platform | **7.260701.0** (verified). The platform and `pycti` are now released in lockstep on the same CalVer string — bumping one without the other will fail at connector registration time (mismatched GraphQL schema). |
 | Python (image runtime) | 3.12 (alpine) |
-| `pycti` | 7.260604.0 (pinned to match the platform version exactly) |
+| `pycti` | 7.260701.0 (pinned to match the platform version exactly) |
 | `pydantic` | >=2.8.2, <3.0.0 |
 | `stix2` | 3.0.1 |
 | `validators` | 0.35.0 |
