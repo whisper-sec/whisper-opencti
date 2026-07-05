@@ -57,7 +57,7 @@ def _append_prefix_block(lines: list[str], announcer: dict, indent: str) -> None
     score = announcer.get("score")
     level = announcer.get("level")
     if level and level != "NONE":
-        if isinstance(score, int | float):
+        if isinstance(score, (int, float)):
             lines.append(f"{indent}ANNOUNCED_PREFIX threat: {level} (score {score:g})")
         else:
             lines.append(f"{indent}ANNOUNCED_PREFIX threat: {level}")
@@ -290,7 +290,7 @@ class WhisperConnector:
         the formatter robust against the LISTED_IN edges that carry null
         firstSeen/lastSeen for some feeds.
         """
-        if not isinstance(value, int | float) or value <= 0:
+        if not isinstance(value, (int, float)) or value <= 0:
             return None
         try:
             return datetime.fromtimestamp(value / 1000, tz=UTC).strftime(
@@ -312,7 +312,7 @@ class WhisperConnector:
         level = first_row.get("threatLevel")
         if score is not None or (level and level != "NONE"):
             level_part = level or "UNKNOWN"
-            if isinstance(score, int | float):
+            if isinstance(score, (int, float)):
                 lines.append(f"Threat assessment: {level_part} (score {score:g})")
             else:
                 lines.append(f"Threat assessment: {level_part}")
@@ -427,7 +427,7 @@ class WhisperConnector:
 
         score = first_row.get("threatScore")
         level = first_row.get("threatLevel")
-        has_score = isinstance(score, int | float) and score > 0
+        has_score = isinstance(score, (int, float)) and score > 0
         has_level = bool(level) and level != "NONE"
         has_flags = any(first_row.get(flag) for flag in THREAT_FLAG_FIELDS)
         if not (has_score or has_level or has_flags or feeds):
@@ -642,7 +642,7 @@ class WhisperConnector:
             v = result.statistics.get("executionTimeMs", 0)  # type: ignore[attr-defined]
         except (AttributeError, TypeError):
             return 0
-        return int(v) if isinstance(v, int | float) else 0
+        return int(v) if isinstance(v, (int, float)) else 0
 
     @staticmethod
     def _format_spf_content(rows: list) -> str:
