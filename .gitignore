@@ -12,6 +12,7 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv-sdk/
 venv/
 env/
 .python-version
@@ -45,5 +46,7 @@ config.yml
 *.log
 logs/
 
-# Claude Code harness state
-.claude/
+# Claude Code harness state — ignore local settings, but share team agents/skills
+.claude/*
+!.claude/agents/
+!.claude/skills/
