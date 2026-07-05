@@ -11,7 +11,7 @@
   "last_verified_date": null,
   "playbook_supported": true,
   "max_confidence_level": 75,
-  "support_version": ">=7.260604.0",
+  "support_version": ">=7.260701.0",
   "subscription_link": "https://whisper.security",
   "source_code": "https://github.com/whisper-sec/whisper-opencti",
   "manager_supported": false,
