@@ -97,7 +97,7 @@ also accepted in a mounted `config.yml` (see
 | `CONNECTOR_TYPE` | no | `INTERNAL_ENRICHMENT` | Do not change - the connector is an internal-enrichment type only. |
 | `CONNECTOR_SCOPE` | no | `IPv4-Addr,IPv6-Addr,Domain-Name,Autonomous-System` | Which entity types this connector responds to. Adding types that the connector doesn't actually support (e.g. `Url`, `StixFile`) just produces "not supported" log lines. |
 | `CONNECTOR_AUTO` | no | `false` | If `true`, OpenCTI automatically enriches every new in-scope observable. Leave `false` until you're confident about Whisper API quota. |
-| `CONNECTOR_LOG_LEVEL` | no | `info` | One of `debug`, `info`, `warning`, `error`. |
+| `CONNECTOR_LOG_LEVEL` | no | `error` | One of `debug`, `info`, `warning`, `error`. |
 
 ### Whisper-Specific Configuration
 
