@@ -12,6 +12,7 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv-sdk/
 venv/
 env/
 .python-version
@@ -44,5 +45,3 @@ config.yml
 # Logs
 *.log
 logs/
-
-# local developer tooling

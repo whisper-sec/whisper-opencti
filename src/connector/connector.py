@@ -32,7 +32,7 @@ from src.connector.result_parser import (
     parse_cypher_result,
     translate_node_cell,
 )
-from src.connector.settings import WhisperSettings
+from src.connector.settings import ConnectorSettings
 from src.connector.whisper_client import WhisperClient
 
 _ASN_NAME_RE = re.compile(r"^AS(\d+)$", re.IGNORECASE)
@@ -57,7 +57,7 @@ def _append_prefix_block(lines: list[str], announcer: dict, indent: str) -> None
     score = announcer.get("score")
     level = announcer.get("level")
     if level and level != "NONE":
-        if isinstance(score, int | float):
+        if isinstance(score, (int, float)):
             lines.append(f"{indent}ANNOUNCED_PREFIX threat: {level} (score {score:g})")
         else:
             lines.append(f"{indent}ANNOUNCED_PREFIX threat: {level}")
@@ -74,20 +74,21 @@ class WhisperConnector:
     def __init__(
         self,
         helper: OpenCTIConnectorHelper,
-        config: WhisperSettings,
+        config: ConnectorSettings,
         client: WhisperClient | None = None,
     ) -> None:
         """Construct the connector with externally-built helper and settings.
 
-        ``main.py`` builds the helper from the parsed ``config.yml`` dict
-        and the connector consumes the typed ``WhisperSettings`` fields
-        (``api_url``, ``api_key``, ``max_tlp``). ``client`` is injectable
-        for tests; production passes a freshly-built ``WhisperClient``.
+        ``main.py`` builds both the helper and the ``ConnectorSettings`` from
+        the connectors-sdk; the connector consumes the typed ``whisper:`` block
+        (``api_url``, ``api_key``, ``max_tlp``). ``client`` is injectable for
+        tests; production passes a freshly-built ``WhisperClient``.
         """
         self.helper = helper
         self.config = config
         self.client = client or WhisperClient(
-            api_url=config.api_url, api_key=config.api_key
+            api_url=config.whisper.api_url,
+            api_key=config.whisper.api_key.get_secret_value(),
         )
 
     @staticmethod
@@ -136,7 +137,7 @@ class WhisperConnector:
         the TLP ceiling would leak intel to a less-trusted Whisper
         account. Raises ``WhisperTlpError`` on violation.
         """
-        max_tlp = self.config.max_tlp
+        max_tlp = self.config.whisper.max_tlp
         for marking in observable.get("objectMarking", []) or []:
             if marking.get("definition_type") == "TLP" and not (
                 OpenCTIConnectorHelper.check_max_tlp(
@@ -160,7 +161,7 @@ class WhisperConnector:
         if not stix_objects:
             return "playbook pass-through: no stix_objects to forward"
         bundle = self.helper.stix2_create_bundle(stix_objects)
-        self.helper.send_stix2_bundle(bundle)
+        self.helper.send_stix2_bundle(bundle, cleanup_inconsistent_bundle=True)
         return f"playbook pass-through: forwarded {len(stix_objects)} STIX object(s)"
 
     def _process_message(self, data: dict) -> str:
@@ -289,7 +290,7 @@ class WhisperConnector:
         the formatter robust against the LISTED_IN edges that carry null
         firstSeen/lastSeen for some feeds.
         """
-        if not isinstance(value, int | float) or value <= 0:
+        if not isinstance(value, (int, float)) or value <= 0:
             return None
         try:
             return datetime.fromtimestamp(value / 1000, tz=UTC).strftime(
@@ -311,7 +312,7 @@ class WhisperConnector:
         level = first_row.get("threatLevel")
         if score is not None or (level and level != "NONE"):
             level_part = level or "UNKNOWN"
-            if isinstance(score, int | float):
+            if isinstance(score, (int, float)):
                 lines.append(f"Threat assessment: {level_part} (score {score:g})")
             else:
                 lines.append(f"Threat assessment: {level_part}")
@@ -426,7 +427,7 @@ class WhisperConnector:
 
         score = first_row.get("threatScore")
         level = first_row.get("threatLevel")
-        has_score = isinstance(score, int | float) and score > 0
+        has_score = isinstance(score, (int, float)) and score > 0
         has_level = bool(level) and level != "NONE"
         has_flags = any(first_row.get(flag) for flag in THREAT_FLAG_FIELDS)
         if not (has_score or has_level or has_flags or feeds):
@@ -641,7 +642,7 @@ class WhisperConnector:
             v = result.statistics.get("executionTimeMs", 0)  # type: ignore[attr-defined]
         except (AttributeError, TypeError):
             return 0
-        return int(v) if isinstance(v, int | float) else 0
+        return int(v) if isinstance(v, (int, float)) else 0
 
     @staticmethod
     def _format_spf_content(rows: list) -> str:
@@ -1136,7 +1137,7 @@ class WhisperConnector:
         # still produces a ``stix2.Bundle`` for the unit tests' sake;
         # ``helper.stix2_create_bundle`` consumes the object list.
         stix_bundle = self.helper.stix2_create_bundle(objects)
-        self.helper.send_stix2_bundle(stix_bundle)
+        self.helper.send_stix2_bundle(stix_bundle, cleanup_inconsistent_bundle=True)
         self.helper.connector_logger.info(
             "Sent STIX bundle",
             {
