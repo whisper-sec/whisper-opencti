@@ -86,7 +86,7 @@ def _is_valid_domain_name(value: str) -> bool:
             return False
         if label.startswith("-") or label.endswith("-"):
             return False
-        if not all(c.isalnum() or c == "-" for c in label):
+        if not all((c.isascii() and c.isalnum()) or c == "-" for c in label):
             return False
     return True
 
