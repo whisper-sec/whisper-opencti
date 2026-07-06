@@ -61,8 +61,20 @@ Pure unit tests, no live network. `tests/test_whisper_client.py` uses the `respo
 
 `.claude/agents/` and `.claude/skills/` ship repo-specific Claude Code tooling — use them and keep them current when the code changes:
 
-- **Agents** ([.claude/agents/](.claude/agents/)) — `connector-developer` (implement/modify connector code), `connector-qa` (validate: lint, tests, dev-stack e2e, the qa-handoff matrix), `connector-docs` (README / qa-handoff / scenarios / manifest).
-- **Skills** ([.claude/skills/](.claude/skills/)) — `opencti-connector` (the pipeline, SDK config, gates, Cypher rules), `stix-id-generation` (the SCO-vs-pycti ID rules), `connector-validation` (the local validation runbook), `opencti-contribution` (the upstream PR process).
+### Agents ([.claude/agents/](.claude/agents/))
+- **`connector-developer`** — Implement/modify connector code (entity types, Cypher queries, result-parser/label mapping, STIX conversion, settings, enrichment pipeline). Knows connectors-sdk + pycti ID conventions and project hard constraints.
+- **`connector-architect`** — Design reviewer and approval authority. Reviews proposed solutions for correctness & design quality before implementation. Ensures constraint compliance (STIX, pycti, RFC 1035) and guides on architecture patterns.
+- **`connector-qa`** — Validate changes: lint, tests (186 cases), Docker build, dev-stack end-to-end enrichment, qa-handoff test matrix. Reports PASS/FAIL/BLOCKED with evidence.
+- **`connector-docs`** — Write/update documentation: README, docs/qa-handoff, docs/scenarios/ walk-throughs, __metadata__ manifest, config schema.
+
+### Skills ([.claude/skills/](.claude/skills/))
+- **`opencti-connector`** — Enrichment pipeline, SDK config, scope/TLP/playbook gates, bundle-send contract, hard constraints.
+- **`stix-id-generation`** — Deterministic STIX 2.1 ID rules: SCOs use stix2 built-ins; SDOs/relationships/notes use pycti.*.generate_id().
+- **`connector-validation`** — Local validation runbook: lint, tests, Docker build, dev-stack e2e, qa-handoff matrix.
+- **`opencti-contribution`** — Upstream PR process: template structure, connectors-sdk + pycti requirements, config-schema generation, signed commits, fork PR workflow.
+- **`bug-fix-workflow`** — Multi-agent orchestration for bug fixes: propose → architect-review → implement → QA → docs → PR. Quality gates at each step.
+- **`pre-pr-validation`** — Development workflow enforcement: no direct pushes to develop/main, feature branches required, local CI checks (lint/test/docker) before PR.
+- **`ci-cd-pipeline`** — CI/CD operations: local checks, GitHub Actions workflows, Docker builds, releases, version management.
 
 ## Further reading
 

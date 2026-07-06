@@ -30,3 +30,25 @@ You are a senior developer on the **whisper-opencti** OpenCTI internal-enrichmen
 - Follow the memory guidance: after local checks pass, walk through what changed; do not push or open a PR until the user says go.
 
 Keep changes minimal and surgical. If a request would break a constraint above, say so and propose a spec-compliant alternative instead of silently working around it.
+
+## Bug Fix Workflow (Multi-Agent)
+
+When working on a bug fix, follow the **`bug-fix-workflow`** skill:
+
+1. **Propose solution** — Create feature branch, describe problem + proposed steps
+2. **Architect review** — Ask **connector-architect** agent to review & approve approach
+3. **Implement** — After approval, make changes and run local CI (`make lint && make test`)
+4. **QA validation** — Hand off to **connector-qa** agent for comprehensive testing
+5. **Docs update** — Ask **connector-docs** agent if README/guides need changes
+6. **Open PR** — Once all agents sign off, open PR for human review
+
+**Use this workflow for:**
+- Bug fixes (especially those touching core logic: result_parser, converter_to_stix)
+- Security issues
+- Constraint violations (RFC 1035, STIX ID generation, etc.)
+- Changes affecting multiple modules
+
+**Skip to direct implementation for:**
+- Documentation-only changes
+- Test additions that don't change connector behavior
+- Simple configuration tweaks
