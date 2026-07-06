@@ -457,12 +457,16 @@ appropriate severity.
 
 ### Development
 
+#### Local Setup
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r src/requirements.txt -r requirements-dev.txt
 
-make lint    # ruff check + ruff format --check
-make test    # pytest
+make lint           # isort + black + flake8 + pylint (STIX-ID)
+make test           # pytest (186 cases)
+make docker-build   # build Docker image locally
+make dev-up         # start full OpenCTI + connector stack
 ```
 
 The full suite covers the HTTP client, STIX mapper, result parser, and the
@@ -470,6 +474,46 @@ connector callback. CI runs lint + tests + a Docker image build on every PR
 to `main` and `develop` — see
 [.github/workflows/ci.yml](./.github/workflows/ci.yml) for the live count
 and current status.
+
+#### Multi-Agent Workflow for Bug Fixes
+
+When fixing a bug, follow the **multi-agent orchestration workflow**:
+
+1. **Propose solution** — Create feature branch, describe problem + proposed steps
+2. **Architect review** — Ask `connector-architect` agent to review & approve approach
+3. **Implement** — After approval, make changes and run local CI checks
+4. **QA validation** — Hand off to `connector-qa` agent for comprehensive testing
+5. **Docs update** — Ask `connector-docs` agent if README/guides need changes
+6. **Open PR** — Once all validations pass, open PR for human review
+
+See [.claude/skills/bug-fix-workflow/SKILL.md](./.claude/skills/bug-fix-workflow/SKILL.md) for the full workflow and examples.
+
+**Use this workflow for:**
+- Bug fixes (especially those touching core logic)
+- Security issues
+- Constraint violations (RFC 1035, STIX ID generation, version mismatches)
+- Changes affecting multiple modules
+
+**Skip to direct implementation for:**
+- Documentation-only changes
+- Test additions that don't change connector behavior
+- Simple configuration tweaks
+
+#### Pre-PR Validation
+
+All changes must follow the **pre-PR validation workflow**:
+- Create feature branch (never commit directly to `develop` or `main`)
+- Run local CI checks: `make lint && make test && make docker-build`
+- Push feature branch and open PR (no direct pushes to protected branches)
+
+See [.claude/skills/pre-pr-validation/SKILL.md](./.claude/skills/pre-pr-validation/SKILL.md) for the full workflow and troubleshooting.
+
+#### Available Agents & Skills
+
+- **Agents** (`.claude/agents/`) — `connector-developer`, `connector-architect`, `connector-qa`, `connector-docs`
+- **Skills** (`.claude/skills/`) — `opencti-connector`, `stix-id-generation`, `connector-validation`, `bug-fix-workflow`, `pre-pr-validation`, `ci-cd-pipeline`
+
+See [CLAUDE.md](./CLAUDE.md#subagents--skills) for descriptions of each agent and skill.
 
 ### Repository Layout
 
