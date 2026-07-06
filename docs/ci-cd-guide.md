@@ -452,11 +452,11 @@ Why?
 # Check what connectors-sdk requires
 curl https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connectors-sdk/pyproject.toml \
   | grep '"pycti'
-# Output: "pycti==7.260701.0"
+# Output: "pycti==7.260706.0"
 
 # Check local requirement
 grep pycti src/requirements.txt
-# Output: pycti==7.260701.0
+# Output: pycti==7.260706.0
 
 # ✅ They match!
 ```
