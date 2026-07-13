@@ -1,0 +1,22 @@
+# Mirrors upstream OpenCTI-Platform/connectors workflow:
+#   .github/workflows/gh-do-not-merge-label.yml
+# Adapted for this single-connector repo (issue #89): replicated as-is —
+# same "do not merge" label name, PR trigger types (incl. labeled/unlabeled),
+# and check names; upstream uses no path filters or monorepo matrix here,
+# so nothing was dropped.
+name: Do Not Merge label check
+
+on:
+  pull_request:
+    types: [opened, reopened, labeled, unlabeled, synchronize]
+
+jobs:
+  do-not-merge:
+    name: Block merge if "do not merge" label is present
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for "do not merge" label
+        if: contains(github.event.pull_request.labels.*.name, 'do not merge')
+        run: |
+          echo "::error::This PR has the 'do not merge' label. Remove it before merging."
+          exit 1
