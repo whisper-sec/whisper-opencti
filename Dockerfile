@@ -32,8 +32,8 @@ RUN apk add --no-cache libmagic libffi && \
     apk del .build-deps
 
 COPY src/ ./src/
-COPY entrypoint.sh healthcheck.sh ./
-RUN chmod +x entrypoint.sh healthcheck.sh
+COPY healthcheck.sh ./
+RUN chmod +x healthcheck.sh
 
 # Run as a non-root user. UID 10001 matches the OpenCTI platform convention
 # and stays clear of common host UIDs (typically 1000-1500).
@@ -48,4 +48,7 @@ USER connector
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
     CMD ./healthcheck.sh
 
-ENTRYPOINT ["./entrypoint.sh"]
+# Exec-form ENTRYPOINT, no shell wrapper - the upstream Verified linter
+# (VC402) forbids an entrypoint.sh shim. python is PID 1 either way, so
+# SIGTERM from `docker stop` still reaches the connector directly.
+ENTRYPOINT ["python", "-m", "src.main"]

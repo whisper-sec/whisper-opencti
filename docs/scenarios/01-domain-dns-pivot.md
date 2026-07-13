@@ -66,6 +66,7 @@ with `$value = "dns.google"` and `$limit = 50`. (Template:
   "type": "bundle",
   "id": "bundle--…",
   "objects": [
+    {"type": "identity", "id": "identity--<whisper-author>", "name": "Whisper", "identity_class": "organization"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-dns.google>", "value": "dns.google"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-8.8.4.4>",  "value": "8.8.4.4"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-pms>",     "value": "pms-zams.at"},
