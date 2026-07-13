@@ -153,7 +153,7 @@ PYTHONPATH=. pylint ../../../src ../../../tests \
 
 **Tool**: pytest
 
-**Test Count**: 186 cases
+**Test Count**: 197 cases
 
 **Test Files**:
 - `tests/test_connector.py` - End-to-end connector behavior
@@ -320,7 +320,7 @@ make qa-clean        # Stop + wipe
 ### Running Tests
 
 ```bash
-make test                              # Run all 186 tests
+make test                              # Run all 197 tests
 pytest                                 # Same
 pytest tests/test_connector.py          # Single file
 pytest tests/test_connector.py::test_name  # Single test
@@ -411,7 +411,7 @@ RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev git && \
 **Layer 3**: Source code + scripts
 ```dockerfile
 COPY src/ ./src/
-COPY entrypoint.sh healthcheck.sh ./
+COPY healthcheck.sh ./
 ```
 
 **Layer 4**: Non-root user (UID 10001 = OpenCTI convention)
