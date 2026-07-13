@@ -55,6 +55,13 @@ that the expected outcomes shouldn't shift wildly week-to-week.
 The three worked walk-throughs in [docs/scenarios/](./scenarios/) show the
 expected shape of the resulting STIX bundles in detail.
 
+Every non-empty bundle leads with a `Whisper` author `Identity`
+(organization), and every other object is attributed to it
+(SDOs/relationships/Notes via `created_by_ref`, SCOs via
+`x_opencti_created_by_ref`) - so enriched entities show **Whisper** as
+their author in the OpenCTI UI, and the `N` in
+`Enriched … with N STIX objects` includes that Identity object.
+
 ## 3. Test case matrix
 
 Cover each row at least once per release candidate. The "Expected" column

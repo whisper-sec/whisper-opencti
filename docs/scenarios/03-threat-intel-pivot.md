@@ -75,9 +75,10 @@ only sees the *positive* signals, not a noisy 13-column table.
 
 The connector then synthesises a single `Note` SDO, attaches it to the
 seed Domain-Name SCO via `object_refs`, and includes it in the bundle's
-`extra_objects`. The Note's STIX ID is a UUIDv5 keyed off
-`(seed_stix_id, content)` so re-enriching the same seed produces the
-same Note ID - OpenCTI dedupes cleanly.
+`extra_objects`. The Note's STIX ID comes from `pycti.Note.generate_id`,
+keyed off `(content, abstract)` with `created` left unset, so
+re-enriching the same seed produces the same Note ID - OpenCTI dedupes
+cleanly.
 
 ### Resulting STIX bundle (trimmed)
 
@@ -85,6 +86,8 @@ same Note ID - OpenCTI dedupes cleanly.
 {
   "type": "bundle",
   "objects": [
+    {"type": "identity", "id": "identity--<whisper-author>",
+     "name": "Whisper", "identity_class": "organization"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-mta>",
      "value": "malware-traffic-analysis.net"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-bd>",

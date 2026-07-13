@@ -20,6 +20,11 @@ target-version = ["py311"]
 profile = "black"
 line_length = 88
 known_first_party = ["src"]
+# isort only skips `.venv`/`venv` by default (black respects .gitignore, so
+# it never had this problem) - without this it recurses into `.venv-sdk` and
+# rewrites import order inside installed site-packages, breaking packages
+# with order-dependent imports (dill, which pylint loads).
+extend_skip = [".venv-sdk"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
