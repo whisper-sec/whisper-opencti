@@ -1,0 +1,104 @@
+# Mirrors OpenCTI-Platform/connectors .github/workflows/ci-unused-deps.yml
+# (upstream CI parity, issue #89).
+#
+# Adaptations for this single-connector repo:
+#   - Triggers: pull_request + push to main/develop instead of upstream's
+#     monorepo path filters; the changed-connector detection loop
+#     (`gh pr diff` + per-connector iteration) is dropped — there is only
+#     one connector, rooted at src/.
+#   - deptry runs from inside src/ rather than `deptry <connector>/src` from
+#     the repo root: our root pyproject.toml has a PEP 621 [project] table
+#     (without dependencies), which deptry would otherwise pick up as the
+#     dependency source and never check requirements.txt (no DEP002 output).
+#     Upstream's monorepo root has no pyproject.toml, so it doesn't hit this.
+#   - The per-dependency ignores from upstream's shared
+#     .github/deptry-package-map.txt (`ignore=` section) are inlined below as
+#     IGNORE_PKGS, with the same "runtime-implicit, never imported directly"
+#     semantics.
+#   - PR-comment plumbing (actions/github-script create/update/delete comment
+#     steps) is skipped; findings go to $GITHUB_STEP_SUMMARY instead, so
+#     `permissions` drops pull-requests: write.
+#
+# Like upstream, this check is warning-only and never fails the build.
+
+name: Unused Dependencies (warning)
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deptry:
+    name: Check Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install deptry
+        run: pip install deptry==0.25.1
+
+      - name: Run deptry
+        id: deptry
+        run: |
+          src="src"
+          req="src/requirements.txt"
+          warnings=""
+
+          # Runtime-implicit packages, never imported directly — same
+          # convention as the `ignore=` section of upstream's
+          # .github/deptry-package-map.txt. Pipe-separated for a single
+          # `--per-rule-ignores DEP002=` argument.
+          #   PyYAML            — config.yml is parsed by connectors-sdk/pycti at
+          #                       runtime; pinned here only to control the version
+          #   pydantic-settings — backs connectors-sdk BaseConnectorSettings;
+          #                       never imported directly by the connector
+          IGNORE_PKGS="PyYAML|pydantic-settings"
+
+          while IFS= read -r line; do
+            # Extract package name from deptry output: DEP002 'pkg-name' defined ...
+            pkg=${line#*"DEP002 '"}
+            pkg=${pkg%%"'"*}
+            # Find the line number of the package in requirements.txt
+            escaped_pkg=$(printf '%s' "$pkg" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
+            lineno=$(grep -n -iE "^${escaped_pkg}(\[[^\]]+\])?([[:space:]]|[=<>~!]|$)" "$req" | head -1 | cut -d: -f1 || true)
+            lineno=${lineno:-1}
+            echo "::warning file=$req,line=$lineno,title=Unused dependency::$pkg is listed in $req but not imported in $src"
+            warnings="${warnings}- \`${pkg}\` in \`${req}\`\n"
+          done < <(cd "$src" && deptry . --requirements-files requirements.txt --no-ansi \
+            ${IGNORE_PKGS:+--per-rule-ignores "DEP002=$IGNORE_PKGS"} \
+            2>&1 | grep "DEP002" || true)
+
+          if [ -n "$warnings" ]; then
+            echo "::notice title=How to fix unused dependency warnings::For each warning: (1) if the package IS used but under a different import name (e.g. 'PyYAML' -> 'yaml'), add it to the ignores/mappings in .github/workflows/ci-unused-deps.yml. (2) if the package is truly unused, remove it from src/requirements.txt."
+            {
+              echo "## Unused dependencies (warning)"
+              echo ""
+              echo "The following packages appear to be unused:"
+              echo ""
+              echo -e "$warnings"
+              echo "> **How to fix:** (1) if the package is used but under a different import name (e.g. \`PyYAML\` -> \`yaml\`), add it to the ignores/mappings in \`.github/workflows/ci-unused-deps.yml\`. (2) if truly unused, remove it from \`src/requirements.txt\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Unused dependencies (warning)"
+              echo ""
+              echo "No unused dependencies detected."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

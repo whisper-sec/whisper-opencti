@@ -1,0 +1,132 @@
+# Mirrors .github/workflows/ci-connector-verified-linter.yml (the `vclint` job)
+# from OpenCTI-Platform/connectors, adapted for this single-connector repo
+# (issue #89):
+#   - No detect-connectors / detect-new-connectors matrix plumbing: this repo
+#     holds exactly one connector, so the repo is staged into
+#     $RUNNER_TEMP/monorepo/internal-enrichment/whisper/ to reproduce the
+#     monorepo layout the linter expects.
+#   - Triggers are plain pull_request + push to main/develop instead of
+#     upstream's connector path filters; the PR-comment (vclint-comment) and
+#     VC305 new-connector jobs are dropped.
+#   - connector-linter is installed from the upstream repo via pip
+#     (git+...#subdirectory=shared/tools/connector_linter) since the tool's
+#     source lives upstream, not here.
+#   - Documented, intentional findings (container image name differs until the
+#     connector is released upstream) are suppressed via
+#     .github/vclint-allowlist.txt; the job fails iff any non-allowlisted
+#     ::error remains.
+
+name: Connector Verified Linter
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: connector-verified-linter-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  vclint:
+    name: Lint internal-enrichment/whisper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Stage the repo as internal-enrichment/whisper inside a synthetic
+      # monorepo root. The exclude list mirrors the upstream port's file set
+      # (git ls-files of OpenCTI-Platform/connectors feat/whisper-connector,
+      # internal-enrichment/whisper/): anything tracked here but intentionally
+      # NOT ported upstream (internal-only tooling, dev/QA compose stacks,
+      # docs, lint configs, CI, agent config) is excluded so the linter sees
+      # the same tree upstream CI would lint.
+      - name: Stage connector into monorepo layout
+        run: |
+          mkdir -p "$RUNNER_TEMP/monorepo/internal-enrichment/whisper"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='.githooks' \
+            --exclude='CLAUDE.md' \
+            --exclude='CODEOWNERS' \
+            --exclude='LICENSE' \
+            --exclude='NOTICE' \
+            --exclude='Makefile' \
+            --exclude='docs' \
+            --exclude='docker-compose.base.yml' \
+            --exclude='docker-compose.dev.yml' \
+            --exclude='docker-compose.qa.yml' \
+            --exclude='.env.example' \
+            --exclude='.flake8' \
+            --exclude='pyproject.toml' \
+            --exclude='requirements-dev.txt' \
+            --exclude='shared' \
+            --exclude='tools' \
+            --exclude='healthcheck.sh' \
+            --exclude='/src/__init__.py' \
+            --exclude='/tests/__init__.py' \
+            --exclude='.venv' \
+            --exclude='venv' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.pytest_cache' \
+            --exclude='.mypy_cache' \
+            --exclude='.ruff_cache' \
+            --exclude='.env' \
+            --exclude='config.yml' \
+            --exclude='.DS_Store' \
+            ./ "$RUNNER_TEMP/monorepo/internal-enrichment/whisper/"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install connector-linter
+        run: pip install 'git+https://github.com/OpenCTI-Platform/connectors.git@master#subdirectory=shared/tools/connector_linter'
+
+      # Same run shape as upstream's vclint job (github-format annotations +
+      # verbose markdown step summary), but the pass/fail decision is deferred
+      # to the allowlist filter step below.
+      - name: Run connector-linter
+        working-directory: ${{ runner.temp }}/monorepo
+        run: |
+          set -o pipefail
+          echo "::group::Linting internal-enrichment/whisper"
+          connector-linter check internal-enrichment/whisper --format github | tee annotations.txt || true
+          connector-linter check internal-enrichment/whisper --format markdown --verbose >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "::endgroup::"
+
+      # Drop ::error findings matching .github/vclint-allowlist.txt (fixed-
+      # string patterns, one per line, '#' comments). Fail iff any
+      # non-allowlisted ::error remains.
+      - name: Fail on non-allowlisted errors
+        working-directory: ${{ runner.temp }}/monorepo
+        run: |
+          allowlist="$GITHUB_WORKSPACE/.github/vclint-allowlist.txt"
+          grep -v '^[[:space:]]*#' "$allowlist" | grep -v '^[[:space:]]*$' > allow-patterns.txt || true
+          grep '^::error ' annotations.txt > errors.txt || true
+
+          if [ -s allow-patterns.txt ] && [ -s errors.txt ]; then
+            grep -F -v -f allow-patterns.txt errors.txt > remaining.txt || true
+          else
+            cp errors.txt remaining.txt
+          fi
+
+          allowlisted_count=$(( $(wc -l < errors.txt) - $(wc -l < remaining.txt) ))
+          echo "Allowlisted errors suppressed: ${allowlisted_count}"
+
+          if [ -s remaining.txt ]; then
+            echo "Non-allowlisted connector-linter errors found:"
+            cat remaining.txt
+            exit 1
+          fi
+          echo "No non-allowlisted connector-linter errors."

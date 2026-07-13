@@ -1,0 +1,17 @@
+# Allowlist for the Connector Verified Linter workflow
+# (.github/workflows/ci-connector-verified-linter.yml, issue #89).
+#
+# Each non-comment line is a fixed-string pattern (grep -F). Any linter
+# ::error annotation containing one of these patterns is treated as a
+# documented, intentional deviation and does not fail the job.
+# Every entry MUST carry a "# reason" comment above it.
+
+# reason: this repo publishes its own image (ghcr.io/whisper-sec/whisper-opencti);
+# the opencti/connector-whisper image name only exists once the connector is
+# merged and released upstream. The manifest intentionally keeps our image.
+VC202: "container_image": "ghcr.io/whisper-sec/whisper-opencti" — expected "opencti/connector-whisper"
+
+# reason: same as above — the user-facing docker-compose.yml snippet references
+# whisper-sec/whisper-opencti, the image actually published from this repo,
+# not the upstream opencti/connector-whisper name.
+VC401: Image name 'whisper-sec/whisper-opencti' does not match expected 'opencti/connector-whisper'
