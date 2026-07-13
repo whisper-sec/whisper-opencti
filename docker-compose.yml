@@ -1,6 +1,9 @@
 # Snippet for OpenCTI admins: paste this `connector-whisper` service into
 # your existing OpenCTI docker-compose to register the Whisper connector.
 # For local development, use docker-compose.dev.yml instead.
+#
+# Variables with a built-in default are commented out (upstream convention):
+# uncomment them only to override the default.
 
 services:
   connector-whisper:
@@ -10,10 +13,10 @@ services:
       - OPENCTI_URL=${OPENCTI_URL}
       - OPENCTI_TOKEN=${OPENCTI_TOKEN}
       - CONNECTOR_ID=${CONNECTOR_ID}
-      - CONNECTOR_TYPE=INTERNAL_ENRICHMENT
-      - CONNECTOR_NAME=Whisper
-      - CONNECTOR_SCOPE=IPv4-Addr,IPv6-Addr,Domain-Name,Autonomous-System
-      - CONNECTOR_AUTO=false
-      - CONNECTOR_LOG_LEVEL=info
+      #- CONNECTOR_LOG_LEVEL=error
+      #- CONNECTOR_NAME=Whisper
+      #- CONNECTOR_SCOPE=IPv4-Addr,IPv6-Addr,Domain-Name,Autonomous-System
+      #- CONNECTOR_AUTO=false # Enable/disable auto-enrichment of observables
       - WHISPER_API_URL=${WHISPER_API_URL}
       - WHISPER_API_KEY=${WHISPER_API_KEY}
+      #- WHISPER_MAX_TLP=TLP:AMBER+STRICT
