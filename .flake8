@@ -4,6 +4,7 @@
 # complexity warnings, not style checks (black + isort own formatting).
 extend-exclude =
     .venv,
+    .venv-sdk,
     .git,
     __pycache__,
     .pytest_cache,

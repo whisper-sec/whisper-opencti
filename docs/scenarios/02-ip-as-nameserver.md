@@ -73,6 +73,7 @@ bundle.
 {
   "type": "bundle",
   "objects": [
+    {"type": "identity",     "id": "identity--<whisper-author>",    "name": "Whisper", "identity_class": "organization"},
     {"type": "ipv4-addr",    "id": "ipv4-addr--<uuid-of-1.1.1.1>",  "value": "1.1.1.1"},
     {"type": "domain-name",  "id": "domain-name--<uuid-of-colnet>", "value": "colnet.com.ar"},
     {"type": "domain-name",  "id": "domain-name--<uuid-of-wwwcol>", "value": "www.colnet.com.ar"},
@@ -101,7 +102,8 @@ plus optional `HAS_NAME` (for the ASN's human label) and `BELONGS_TO`
 (static prefix). The result is folded into:
 
 - a real `Autonomous-System` SCO in the bundle (clickable in OpenCTI,
-  deduped by UUIDv5 keyed off the Whisper ASN nodeId);
+  deduped by the stix2 library's deterministic SCO ID, keyed off the AS
+  number);
 - a `related-to` relationship `IP → AS` tagged
   `description="ANNOUNCED_BY"` so analysts can distinguish the announcing
   AS from any other ASN they later add by hand;

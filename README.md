@@ -346,8 +346,9 @@ For each enrichment request the connector:
 7. For IPv4/IPv6 seeds, issues a supplementary 2-hop network-context query
    (announcing ASN via ANNOUNCED_PREFIX, ASN_NAME human label, static
    allocation PREFIX).
-8. Assembles a single STIX 2.1 bundle with the SCOs, SDOs, relationships,
-   and Notes, and ships it to OpenCTI for ingestion.
+8. Assembles a single STIX 2.1 bundle - led by the `Whisper` author
+   `Identity` that every other object references - with the SCOs, SDOs,
+   relationships, and Notes, and ships it to OpenCTI for ingestion.
 
 See [docs/architecture.md](./docs/architecture.md) for the per-module deep
 dive.
@@ -377,6 +378,11 @@ outbound`, `LINKS_TO inbound`, etc.) is preserved in the relationship
 
 Per enrichment the bundle ships:
 
+- A `Whisper` author `Identity` SDO (organization) leading every non-empty
+  bundle. All other objects are attributed to it - SDOs, relationships, and
+  Notes via `created_by_ref`, SCOs via the OpenCTI
+  `x_opencti_created_by_ref` custom property - so analysts can filter
+  Whisper-sourced intel by author in the UI
 - SCOs for the seed + every mappable neighbour
 - `related-to` relationships preserving the original Whisper edge type in
   `description`
@@ -464,7 +470,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r src/requirements.txt -r requirements-dev.txt
 
 make lint           # isort + black + flake8 + pylint (STIX-ID)
-make test           # pytest (186 cases)
+make test           # pytest (197 cases)
 make docker-build   # build Docker image locally
 make dev-up         # start full OpenCTI + connector stack
 ```
