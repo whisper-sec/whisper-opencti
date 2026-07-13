@@ -61,7 +61,7 @@ The code is intentionally small and shallow. Six modules in [src/connector/](../
 
 ### 3.1 [src/main.py](../src/main.py) — entry point
 
-Tiny — about 30 lines. Calls `load_yaml_config()` once for the optional `config.yml`, then `WhisperSettings.from_environment(yaml_config)` to build the typed settings (env-overrides-YAML), then `OpenCTIConnectorHelper(yaml_config, playbook_compatible=True)`, hands both to `WhisperConnector(helper, settings).run()`. Wrapped in `try/traceback.print_exc()/sys.exit(1)` so Docker reports the container as `Exited (1)` on any startup failure rather than silently looping. The `entrypoint.sh` shim execs `python -m src.main` so signals propagate cleanly under `docker stop`.
+Tiny — about 30 lines. Calls `load_yaml_config()` once for the optional `config.yml`, then `WhisperSettings.from_environment(yaml_config)` to build the typed settings (env-overrides-YAML), then `OpenCTIConnectorHelper(yaml_config, playbook_compatible=True)`, hands both to `WhisperConnector(helper, settings).run()`. Wrapped in `try/traceback.print_exc()/sys.exit(1)` so Docker reports the container as `Exited (1)` on any startup failure rather than silently looping.
 
 ### 3.2 [settings.py](../src/connector/settings.py) — Pydantic-validated config
 
@@ -155,14 +155,16 @@ Output is `(nodes, edges)` where each is a list of normalized dicts — the publ
 
 Pure functions. No I/O, no logging beyond errors. `build_bundle(nodes, edges) -> stix2.Bundle` is the public entry point.
 
+**Authorship.** Every non-empty bundle leads with `WHISPER_AUTHOR` — a deterministic `Whisper` organization `Identity` (id via `pycti.Identity.generate_id`) that every other object references as its author: SDOs, relationships, and Notes via `created_by_ref`, SCOs via the OpenCTI `x_opencti_created_by_ref` custom property (STIX 2.1 reserves `created_by_ref` for SDOs). Neither property contributes to ID hashing, so authorship doesn't re-key anything. The custom property is also why `build_bundle` wraps with `stix2.Bundle(..., allow_custom=True)`.
+
 **Identifier strategy** — the single most important design point in this module.
 
 - **SCOs** (IPs, domains, URLs, emails, files, autonomous systems) get **deterministic IDs derived from their key properties** by the `stix2` library. Don't pass `id=` for these. STIX 2.1 mandates this so the same value always produces the same SCO ID across re-enrichments — that's what makes the connector idempotent on the OpenCTI side.
-- **SDOs** (`threat-actor`, `malware`) and **`Relationship` objects** get **UUIDv5 IDs keyed off a stable Whisper identifier** under `WHISPER_NAMESPACE` (`a4f8c7b2-...`). Relationships use `edge.id` if present, falling back to `f"{src}|{tgt}|{rel_type}"`.
+- **SDOs** (`threat-actor`, `malware`, `location`, `identity`), **`Relationship`**, and **`Note` objects** get **deterministic IDs from `pycti.*.generate_id`** (`ThreatActorGroup`, `Malware`, `Location`, `Identity`, `StixCoreRelationship`, `Note`) — the same helpers OpenCTI uses server-side. Relationships are keyed off `(relationship_type, source_ref, target_ref)`; Notes off `(content, abstract)` with `created` left unset so re-runs don't re-key.
 
 Together these ensure that running the same enrichment twice produces a bundle with **the same set of STIX IDs**, so OpenCTI updates existing entities instead of duplicating them.
 
-**Never change `WHISPER_NAMESPACE`.** It re-keys every SDO and relationship the connector has ever produced. This is the one constant in the codebase that is load-bearing forever.
+**Never reintroduce a custom UUID namespace.** The old `WHISPER_NAMESPACE` UUIDv5 scheme was removed in the connectors-sdk migration — pycti's `generate_id` helpers are what make our IDs dedup against OpenCTI server-side and against other connectors. A custom namespace would silently fork every SDO and relationship the connector produces.
 
 `NODE_MAPPERS` is a static dispatch table; `ALLOWED_RELATIONSHIPS` is an allowlist. Unmapped types raise `StixMappingError` rather than producing malformed STIX — fail loudly at the boundary.
 
@@ -215,12 +217,13 @@ Concrete trace for `IPv4-Addr 8.8.8.8` under the v7 callback contract:
     - Return `(nodes, edges)`.
 11. `collect_dropped_hostnames(result)` (issue #51) — scans the same main result for HOSTNAME records dropped for RFC 1035 violations. Non-empty result → `Whisper dropped non-RFC-1035 DNS records` Note attached to the seed.
 12. `build_bundle(nodes, edges, extra_objects=notes)`:
-    - For each node, dispatch through `NODE_MAPPERS` → produce `stix2.IPv4Address(...)` etc. with deterministic SCO IDs (and SDOs via UUIDv5 under `WHISPER_NAMESPACE`).
+    - For each node, dispatch through `NODE_MAPPERS` → produce `stix2.IPv4Address(...)` etc. with deterministic SCO IDs (and SDOs via `pycti.*.generate_id`).
     - For each edge, build `stix2.Relationship(id=..., relationship_type=..., source_ref=..., target_ref=...)` with the original Whisper edge type preserved in `description`.
     - Append the Notes.
-    - Wrap in `stix2.Bundle(objects=...)`.
+    - Prepend `WHISPER_AUTHOR`, the `Whisper` organization Identity every other object references via `created_by_ref` / `x_opencti_created_by_ref` (§3.7).
+    - Wrap in `stix2.Bundle(objects=..., allow_custom=True)`.
 13. `helper.stix2_create_bundle(bundle.objects)` → JSON string. `helper.send_stix2_bundle(...)` publishes it to RabbitMQ for the OpenCTI worker to ingest.
-14. `_process_message` returns `"Enriched 8.8.8.8 with 9 STIX objects (query: 47ms)"`. OpenCTI displays this as the work-item status.
+14. `_process_message` returns `"Enriched 8.8.8.8 with 10 STIX objects (query: 47ms)"` — the count is `len(bundle.objects)`, so it includes the leading author Identity. OpenCTI displays this as the work-item status.
 
 ## 5. Configuration
 
@@ -248,11 +251,11 @@ Two compose files with deliberately different scopes:
 - **[docker-compose.dev.yml](../docker-compose.dev.yml)** — full local stack: stock `opencti/platform`, `opencti/worker`, plus `redis`, `elasticsearch`, `minio`, `rabbitmq`, and the connector. Used by `make dev-up`. **Self-contained reproducible environment**, which is what AC #4 (QA hand-off) hinges on.
 - **[docker-compose.yml](../docker-compose.yml)** — connector-only snippet meant to be pasted into an existing OpenCTI compose. Eight env vars, no dependencies of its own. This is what an OpenCTI admin installs in production.
 
-The `Dockerfile` is a single-stage `python:3.11-slim` build. The only non-pip dependency is `libmagic1` (transitively required by `pycti` via `python-magic`).
+The `Dockerfile` is a single-stage `python:3.12-alpine` build: non-root user (UID 10001, the OpenCTI convention), a `healthcheck.sh` liveness probe, and a direct exec-form `ENTRYPOINT ["python", "-m", "src.main"]` — there is no `entrypoint.sh` shim (the upstream Verified linter forbids one, VC402); python is PID 1 either way, so SIGTERM from `docker stop` reaches the connector directly. The only non-pip runtime dependencies are `libmagic` (transitively required by `pycti` via `python-magic`) and `libffi`.
 
 ## 7. Testing strategy
 
-Five test files in [tests/](../tests/), 76 cases total, all unit tests. No live network calls.
+Seven test files in [tests/](../tests/), 197 cases total, all unit tests. No live network calls.
 
 | File | Covers | Technique |
 |---|---|---|
@@ -261,6 +264,8 @@ Five test files in [tests/](../tests/), 76 cases total, all unit tests. No live 
 | [test_result_parser.py](../tests/test_result_parser.py) | Cypher row → normalized graph, including direction orientation and dropped-label behavior | Hand-built `CypherResult` fixtures |
 | [test_converter_to_stix.py](../tests/test_converter_to_stix.py) | Node/edge mapping, idempotency (same input → same IDs), error paths | Construct normalized dicts, assert STIX shape |
 | [test_connector.py](../tests/test_connector.py) | End-to-end callback with helper + client mocked | Injects fake `OpenCTIConnectorHelper` and `WhisperClient` |
+| [test_settings.py](../tests/test_settings.py) | connectors-sdk settings: field validation, TLP values, valid-config instantiation | `StubConnectorSettings` / `make_config` from [conftest.py](../tests/conftest.py) |
+| [test_main.py](../tests/test_main.py) | Entrypoint startup + OpenCTI registration retry in `src/main.py` | Mocked helper construction |
 
 **Deliberate gap:** no integration test against the live Whisper API in CI. The dev stack + QA manual matrix in [docs/qa-handoff.md](qa-handoff.md) is the only true end-to-end check today.
 

@@ -8,6 +8,14 @@ Three worked walk-throughs that each show:
    writing — your results will differ as the graph evolves).
 4. The STIX 2.1 bundle the connector ships back to OpenCTI.
 
+Every non-empty bundle leads with the `Whisper` author `Identity`
+(organization). All other objects are attributed to it — SDOs,
+relationships, and Notes via `created_by_ref`, SCOs via the OpenCTI
+`x_opencti_created_by_ref` custom property — so enriched entities show
+**Whisper** as their author in the UI. The trimmed bundles in the
+walk-throughs show the leading Identity but omit the per-object authorship
+refs for brevity.
+
 Use these to learn the connector's behaviour, to demo it, or to reproduce a
 specific outcome when comparing two builds.
 

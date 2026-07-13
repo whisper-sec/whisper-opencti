@@ -129,7 +129,7 @@ make docker-build
 
 ```bash
 # Unit tests
-make test                    # All 186 tests must pass
+make test                    # All 197 tests must pass
 pytest tests/test_module.py  # Specific test file
 
 # Lint/Type checks
@@ -152,7 +152,7 @@ make dev-clean
 ## QA Validation Report
 
 ### Unit Tests
-- ✅ PASS: 186/186 tests pass
+- ✅ PASS: 197/197 tests pass
 - Evidence: [pytest output summary]
 
 ### Lint & Type Checks
@@ -282,7 +282,7 @@ gh pr create \
 
 ### Pre-Docs
 - [ ] QA validation passed
-- [ ] All 186 tests pass
+- [ ] All 197 tests pass
 - [ ] Docker image builds
 - [ ] Integration tests pass (if applicable)
 
@@ -341,7 +341,7 @@ make lint && make test && make docker-build
 **Step 5: QA Validates**
 ```markdown
 ✅ PASS
-- 186 tests pass
+- 197 tests pass
 - Lint clean
 - Docker builds
 - Unicode hostnames now rejected ✅

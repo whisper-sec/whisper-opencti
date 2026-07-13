@@ -16,7 +16,7 @@ A single request walks these modules in order — read them in this order when d
 3. **[queries.py](../../../src/connector/queries.py)** — picks a Cypher template by entity type. See "Cypher constraints".
 4. **[whisper_client.py](../../../src/connector/whisper_client.py)** — `WhisperClient.execute_cypher` POSTs to `<api_url>/api/query` with `X-API-Key`; retries 5xx/429/transport 3× with backoff; 401/403 → `WhisperAuthError`, other 4xx → `WhisperQueryError`, post-retry 429 → `WhisperTransportError`.
 5. **[result_parser.py](../../../src/connector/result_parser.py)** — walks `CypherResult.rows`, distinguishes node cells (`nodeId`) from edge cells (`type`), infers edge direction by column position (`_nearest_node`), orients direction-sensitive rels (`_orient_edge`), and maps Whisper labels to STIX types. Unmapped labels (FEED_SOURCE, PREFIX, RIR, TLD, PHONE, …) are silently dropped, and edges touching a dropped node drop with them.
-6. **[converter_to_stix.py](../../../src/connector/converter_to_stix.py)** — `build_bundle` turns normalized nodes/edges into a `stix2.Bundle`; `build_note` emits Note SDOs. See the `stix-id-generation` skill for the ID rules — they are the easiest thing to get wrong.
+6. **[converter_to_stix.py](../../../src/connector/converter_to_stix.py)** — `build_bundle` turns normalized nodes/edges into a `stix2.Bundle`; `build_note` emits Note SDOs. Every non-empty bundle leads with the `WHISPER_AUTHOR` Identity; all other objects reference it via `created_by_ref` (SDOs/rels/Notes) or `x_opencti_created_by_ref` (SCOs) — upstream Verified linter VC302. See the `stix-id-generation` skill for the ID rules — they are the easiest thing to get wrong.
 
 ## connectors-sdk configuration
 
