@@ -16,10 +16,14 @@ Mirrors the Filigran [CONTRIBUTING.md](https://github.com/OpenCTI-Platform/conne
 
 To port: copy each changed file and translate `src.connector` → `connector`, then re-run isort/black on the fork (shorter import paths change line lengths). Diff against the fork's current file to confirm only intended changes land — never clobber fork-specific content.
 
+Port checklist extras:
+- `config.yml.sample` placement (Verified linter VC104): the linter wants it at the connector root — `internal-enrichment/whisper/config.yml.sample` in the fork (`src/` is only a WARNING-grade fallback; missing is an ERROR). In this repo it lives at the repo root, which maps to the connector root when ported.
+- Test imports like `from tests.conftest import ...` must be translated to the fork's test layout (`conftest.py` uses `sys.path.append`, no `tests` package).
+
 ## Required structure & standards (CONTRIBUTING.md)
 
 - `__metadata__/connector_manifest.json` (name ≤250, short_description ≤250, description, square PNG/JPEG logo ≥96×96) + `connector_config_schema.json` + `CONNECTOR_CONFIG_DOC.md`.
-- `src/connector/{__init__,connector,converter_to_stix,settings}.py`, `src/main.py`, `src/requirements.txt`; `tests/`; `Dockerfile` (python:3.12-alpine, non-root, healthcheck, minimal packages); `entrypoint.sh`; `config.yml.sample`; `.dockerignore`; `README.md`.
+- `src/connector/{__init__,connector,converter_to_stix,settings}.py`, `src/main.py`, `src/requirements.txt`; `tests/`; `Dockerfile` (python:3.12-alpine, non-root, healthcheck, minimal packages, exec-form `ENTRYPOINT ["python", "-m", "src.main"]` — no entrypoint.sh wrapper, the Verified linter forbids it); `config.yml.sample`; `.dockerignore`; `README.md`.
 - **Config via connectors-sdk** Pydantic models with `description=` **and** `examples=` (feeds the config schema).
 - **Deterministic STIX IDs** via the stix2 library (SCOs) + pycti `generate_id` (SDOs/rels/notes) — see `stix-id-generation`.
 - **Lint**: pylint with the vendored STIX plugin, black, isort `--profile black`, flake8 `--ignore=E,W`. Run from repo root.

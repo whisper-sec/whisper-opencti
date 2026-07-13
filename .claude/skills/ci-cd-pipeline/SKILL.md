@@ -13,7 +13,7 @@ Always run these locally before pushing to avoid CI failures:
 
 ```bash
 make lint          # Check formatting + all linters (isort, black, flake8, pylint)
-make test          # Run 186 unit tests
+make test          # Run 197 unit tests
 make format        # Auto-fix formatting issues (isort + black)
 ```
 
@@ -48,7 +48,7 @@ If all pass locally, your PR will almost certainly pass GitHub Actions CI.
 
 ### 4. **test** — Unit tests
 - Tool: pytest
-- Count: 186 test cases
+- Count: 197 test cases
 - **Fix**: `make test` locally to diagnose failures
 
 ### 5. **build** — Docker image build

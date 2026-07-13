@@ -88,13 +88,13 @@ pylint --load-plugins=... src/
 
 #### 3b. Unit Tests
 ```bash
-make test        # Run all 186 tests with pytest
+make test        # Run all 197 tests with pytest
 ```
 
 Expected output:
 ```
 pytest tests/ -ra
-→ 186 passed in 0.24s
+→ 197 passed in 0.24s
 ```
 
 #### 3c. Docker Build
@@ -133,7 +133,7 @@ gh pr create \
 What this change does.
 
 ## Validation
-- [ ] All 186 tests pass
+- [ ] All 197 tests pass
 - [ ] Lint clean (isort, black, flake8, pylint)
 - [ ] Docker build succeeds
 - [ ] Live enrichment tested (if applicable)
@@ -157,7 +157,7 @@ What this change does.
 |--------|---------|
 | `make format` | Auto-format code (isort + black) |
 | `make lint` | Check formatting + linters (no auto-fix) |
-| `make test` | Run unit test suite (186 tests) |
+| `make test` | Run unit test suite (197 tests) |
 | `make docker-build` | Build Docker image locally |
 | `make dev-up` | Start local OpenCTI + connector stack |
 | `make dev-logs` | Tail connector logs |
