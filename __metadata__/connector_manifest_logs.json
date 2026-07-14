@@ -1,0 +1,21 @@
+{
+  "title": "Whisper Agent Activity",
+  "slug": "whisper-agent-activity",
+  "description": "Periodic EXTERNAL_IMPORT source that pulls a Whisper tenant's own agent-activity logs - DNS lookups, egress connections, and identity allocations - from the Whisper control plane into OpenCTI as STIX 2.1. This is the keyed half of the two-tier Whisper integration: the companion internal-enrichment connector pushes Whisper's public infrastructure graph into OpenCTI on demand, while this source uses the tenant API key to stream that tenant's own agent activity out to the SIEM.\n\nEach poll joins the bare agent id in the log rows against the tenant's agent list to recover the agent's routable IPv6 /128 and fqdn, then emits: a per-agent Infrastructure anchor (with its ipv6-addr /128 and domain-name fqdn wired via consists-of); an observed-data for each identity allocation; a resolves-to relationship plus observed-data for allowed DNS lookups; an Indicator plus Sighting for policy-refused DNS; and a network-traffic plus communicates-with relationship and Sighting for egress connections. Checkpointing uses OpenCTI's native connector-state store - a timestamp cursor with a bounded overlap dedup set - so there is no external dependency.",
+  "short_description": "Stream a Whisper tenant's own agent activity (DNS, egress, allocations) into OpenCTI as STIX on a schedule.",
+  "logo": "__metadata__/logo.png",
+  "use_cases": [
+    "Threat Detection"
+  ],
+  "verified": false,
+  "last_verified_date": null,
+  "playbook_supported": false,
+  "max_confidence_level": 75,
+  "support_version": ">=7.260701.0",
+  "subscription_link": "https://whisper.security",
+  "source_code": "https://github.com/whisper-sec/whisper-opencti",
+  "manager_supported": false,
+  "container_version": "rolling",
+  "container_image": "ghcr.io/whisper-sec/whisper-opencti",
+  "container_type": "EXTERNAL_IMPORT"
+}

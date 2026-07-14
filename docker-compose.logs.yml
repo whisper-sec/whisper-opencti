@@ -1,0 +1,46 @@
+# Agent-activity LOG SOURCE - the EXTERNAL_IMPORT sibling connector.
+#
+# This is a SEPARATE OpenCTI connector from the on-demand graph-enrichment
+# connector (`connector-whisper`). It shares the exact same image and Whisper
+# credentials but runs as its own service with its own CONNECTOR_ID and
+# CONNECTOR_TYPE=EXTERNAL_IMPORT, periodically pulling the tenant's own agent
+# activity (DNS / egress / allocation) into OpenCTI as STIX.
+#
+# Compose it ALONGSIDE the dev stack, e.g.:
+#   docker compose -p whisper-opencti-dev --env-file .env \
+#     -f docker-compose.base.yml -f docker-compose.dev.yml -f docker-compose.logs.yml \
+#     up -d --build connector-whisper-logs
+#
+# Requires two extra .env values (see .env.example):
+#   CONNECTOR_LOGS_ID           a fresh uuid, DISTINCT from CONNECTOR_ID
+#   WHISPER_LOGS_INITIAL_LOOKBACK   first-run window (default -24h)
+# and reuses WHISPER_API_URL / WHISPER_API_KEY from the enrichment config.
+
+services:
+  connector-whisper-logs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: whisper-sec/whisper-opencti:dev
+    # Same image, different entrypoint: run the log-source sibling.
+    # NB: the Dockerfile declares an exec-form ENTRYPOINT (and no CMD), so a
+    # compose `command:` would override CMD (absent) - not the ENTRYPOINT - and
+    # still run `src.main`. Override the ENTRYPOINT itself to run the sibling.
+    entrypoint: ["python", "-m", "src.main_logs"]
+    restart: unless-stopped
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_LOGS_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=Whisper Agent Activity
+      - CONNECTOR_SCOPE=whisper-agent-activity
+      - CONNECTOR_DURATION_PERIOD=${CONNECTOR_LOGS_DURATION_PERIOD:-PT5M}
+      - CONNECTOR_LOG_LEVEL=info
+      - WHISPER_API_URL=${WHISPER_API_URL}
+      - WHISPER_API_KEY=${WHISPER_API_KEY}
+      - WHISPER_LOGS_INITIAL_LOOKBACK=${WHISPER_LOGS_INITIAL_LOOKBACK:--24h}
+      # - WHISPER_LOGS_AGENT=a98874349306a52c8   # optional single-agent filter
+      # - WHISPER_LOGS_BATCH_LIMIT=1000
+    depends_on:
+      - opencti

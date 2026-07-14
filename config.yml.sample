@@ -13,3 +13,29 @@ connector:
 whisper:
   api_url: "https://graph.whisper.security"
   api_key: "ChangeMe"
+
+# ---------------------------------------------------------------------------
+# Agent-activity log source (OPTIONAL, EXTERNAL_IMPORT sibling connector)
+#
+# The block above configures the on-demand graph-ENRICHMENT connector. The
+# sibling below is the periodic agent-activity LOG SOURCE: with the same
+# tenant key it pulls that tenant's own agent DNS / egress / allocation
+# activity into OpenCTI as STIX. Run it as its OWN container with its own
+# CONNECTOR_ID (see docker-compose.logs.yml). It reuses the same `whisper:`
+# block above - one key, one auth path. Leave commented out if you only want
+# enrichment.
+#
+# connector:
+#   id: "ChangeMe-uuid4"            # a DIFFERENT uuid than the enrichment one
+#   type: "EXTERNAL_IMPORT"
+#   name: "Whisper Agent Activity"
+#   scope: "whisper-agent-activity"
+#   duration_period: "PT5M"         # poll interval (ISO-8601 duration)
+#   log_level: "info"
+#
+# whisper:
+#   api_url: "https://graph.whisper.security"
+#   api_key: "whisper_live_…"       # REDACTED - set via WHISPER_API_KEY env, never commit
+#   logs_initial_lookback: "-24h"   # first-run window (also accepts epoch-ms / RFC3339)
+#   # logs_agent: "a98874349306a52c8"  # optional: restrict to a single agent id
+#   logs_batch_limit: 1000          # rows per page (op caps at 10000)
