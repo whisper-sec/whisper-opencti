@@ -36,7 +36,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.connector.connector import WhisperConnector
-from src.connector.settings import ConnectorSettings
+from src.connector.settings import ConnectorSettings, LogConnectorSettings
 from src.connector.whisper_client import WhisperClient
 
 
@@ -101,6 +101,54 @@ def build_settings(**whisper_overrides) -> ConnectorSettings:
         _config: ClassVar[dict] = _test_config(**whisper_overrides)
 
     return _StubSettings()
+
+
+def _log_test_config(**whisper_overrides) -> dict:
+    """In-memory config dict for the EXTERNAL_IMPORT log-source settings.
+
+    Mirrors ``_test_config`` but for ``LogConnectorSettings``: the ``connector:``
+    block is EXTERNAL_IMPORT with a ``duration_period``. ``whisper_overrides``
+    merge into the reused ``whisper:`` block (e.g. ``logs_initial_lookback``).
+    """
+    return {
+        "opencti": {"url": "http://localhost:8080", "token": "test-token"},
+        "connector": {
+            "id": "22222222-2222-2222-2222-222222222222",
+            "type": "EXTERNAL_IMPORT",
+            "name": "Whisper Agent Activity",
+            "scope": "whisper-agent-activity",
+            "log_level": "error",
+            "duration_period": "PT5M",
+        },
+        "whisper": {
+            "api_url": "https://api.whisper.test",
+            "api_key": "test-key",
+            **whisper_overrides,
+        },
+    }
+
+
+class StubLogConnectorSettings(LogConnectorSettings):
+    """``LogConnectorSettings`` loading from a fixed in-memory dict (test stub).
+
+    Same pattern as ``StubConnectorSettings``: the SDK ignores constructor
+    kwargs, so we override ``_load_config_dict`` to feed a fixed dict.
+    """
+
+    _config: ClassVar[dict] = _log_test_config()
+
+    @classmethod
+    def _load_config_dict(cls, data, handler):
+        return handler(cls._config)
+
+
+def build_log_settings(**whisper_overrides) -> LogConnectorSettings:
+    """Construct ``LogConnectorSettings`` from a fixed in-memory config dict."""
+
+    class _StubLogSettings(StubLogConnectorSettings):
+        _config: ClassVar[dict] = _log_test_config(**whisper_overrides)
+
+    return _StubLogSettings()
 
 
 @pytest.fixture

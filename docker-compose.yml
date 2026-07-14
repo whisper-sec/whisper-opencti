@@ -20,3 +20,25 @@ services:
       - WHISPER_API_URL=${WHISPER_API_URL}
       - WHISPER_API_KEY=${WHISPER_API_KEY}
       #- WHISPER_MAX_TLP=TLP:AMBER+STRICT
+
+  # OPTIONAL - agent-activity LOG SOURCE (EXTERNAL_IMPORT sibling).
+  # A second connector on the SAME image + Whisper key that periodically pulls
+  # this tenant's own agent activity (DNS / egress / allocation) into OpenCTI
+  # as STIX. Uncomment to enable; give it its own CONNECTOR_ID.
+  # connector-whisper-logs:
+  #   image: whisper-sec/whisper-opencti:latest
+  #   command: ["python", "-m", "src.main_logs"]
+  #   restart: unless-stopped
+  #   environment:
+  #     - OPENCTI_URL=${OPENCTI_URL}
+  #     - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+  #     - CONNECTOR_ID=${CONNECTOR_LOGS_ID}       # DISTINCT uuid from the one above
+  #     - CONNECTOR_TYPE=EXTERNAL_IMPORT
+  #     - CONNECTOR_NAME=Whisper Agent Activity
+  #     - CONNECTOR_SCOPE=whisper-agent-activity
+  #     - CONNECTOR_DURATION_PERIOD=PT5M
+  #     - WHISPER_API_URL=${WHISPER_API_URL}
+  #     - WHISPER_API_KEY=${WHISPER_API_KEY}
+  #     #- WHISPER_LOGS_INITIAL_LOOKBACK=-24h
+  #     #- WHISPER_LOGS_AGENT=a98874349306a52c8   # optional single-agent filter
+  #     #- WHISPER_LOGS_BATCH_LIMIT=1000

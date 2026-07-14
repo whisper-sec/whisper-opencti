@@ -21,6 +21,7 @@
   - [Production / External Deployment](#production--external-deployment)
   - [Manual Deployment](#manual-deployment)
 - [Usage](#usage)
+- [Agent Activity Log Source](#agent-activity-log-source)
 - [Behavior](#behavior)
   - [Supported Entity Types](#supported-entity-types)
   - [Data Flow](#data-flow)
@@ -304,8 +305,82 @@ flow.
    Notes (LINKS_TO overflow, threat intelligence, network context, dropped
    DNS records).
 
-See [docs/scenarios/](./docs/scenarios/) for three worked walk-throughs with
+See [docs/scenarios/](./docs/scenarios/) for worked walk-throughs with
 real Whisper data and the resulting STIX shapes.
+
+## Agent Activity Log Source
+
+The connector above is the **on-demand enrichment** half of the Whisper
+integration (keyless/graph: it pushes Whisper's public infrastructure graph
+*into* OpenCTI when you click **Enrich → Whisper**). This repo also ships an
+optional **agent-activity log source** - the *keyed* half: with your Whisper
+tenant API key it periodically pulls **your own agents'** activity (DNS
+lookups, egress connections, identity allocations) *out* of the Whisper
+control plane and into OpenCTI as STIX 2.1 timeline intelligence.
+
+It runs as a **separate `EXTERNAL_IMPORT` connector** on the *same image* and
+the *same Whisper key* - one credential, one auth path - with its own
+`CONNECTOR_ID`. The enrichment connector is untouched; you can run either or
+both.
+
+### What it emits
+
+Each poll joins the bare agent id in the log rows against your tenant's agent
+list (`whisper.agents({op:'list'})`) to recover each agent's routable IPv6
+`/128` and fqdn, then maps events to STIX:
+
+| Log kind | STIX emitted |
+| --- | --- |
+| *(every event)* | per-agent **`Infrastructure`** anchor + its **`ipv6-addr`** (`/128`) and **`domain-name`** (fqdn), wired with `consists-of` |
+| `alloc` (identity allocation) | **`observed-data`** over the agent's `/128` + fqdn |
+| `dns` / `allow` | looked-up **`domain-name`** + resolved **`ipv4/ipv6-addr`** + `resolves-to` + **`observed-data`** (agent `/128` → qname) |
+| `dns` / `refused` | **`Indicator`** (`[domain-name:value = '<qname>']`) + **`observed-data`** + a **`Sighting`** - "agent X tried a policy-blocked domain" |
+| `conn` (egress) | **`network-traffic`** (agent `/128` → dst, bytes/packets/port) + `communicates-with` + a **`Sighting`** |
+
+Checkpointing uses OpenCTI's **native connector-state store** - a timestamp
+cursor plus a small overlap dedup window - so there is no external
+dependency. Re-runs are idempotent (deterministic STIX IDs).
+
+### Configuration
+
+Reuses `WHISPER_API_URL` / `WHISPER_API_KEY`, plus:
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `CONNECTOR_ID` | *(required)* | A **fresh** UUIDv4, **distinct** from the enrichment connector's id. |
+| `CONNECTOR_TYPE` | `EXTERNAL_IMPORT` | Fixed. |
+| `CONNECTOR_DURATION_PERIOD` | `PT5M` | Poll interval (ISO-8601 duration). |
+| `WHISPER_LOGS_INITIAL_LOOKBACK` | `-24h` | First-run window. Also accepts an epoch-ms integer or an RFC3339 timestamp. |
+| `WHISPER_LOGS_AGENT` | *(unset)* | Optional: restrict the pull to a single agent id. |
+| `WHISPER_LOGS_BATCH_LIMIT` | `1000` | Rows per control-plane page (the op caps at 10000). |
+
+### Running it
+
+The log source shares the image; only its entrypoint differs
+(`python -m src.main_logs`). Bring it up alongside the dev stack:
+
+```bash
+cp .env.example .env
+# In .env: set WHISPER_API_KEY to your real tenant key (whisper_live_…),
+#          set CONNECTOR_LOGS_ID=$(uuidgen)
+make dev-up
+docker compose -p whisper-opencti-dev --env-file .env \
+  -f docker-compose.base.yml -f docker-compose.dev.yml -f docker-compose.logs.yml \
+  up -d --build connector-whisper-logs
+```
+
+Then **Data → Ingestion → Connectors** shows **Whisper Agent Activity**
+(`EXTERNAL_IMPORT`) as `Started`. See
+[docs/scenarios/04-agent-activity-logs.md](./docs/scenarios/04-agent-activity-logs.md)
+for the full end-to-end runbook (provision a real agent → drive traffic →
+confirm the `/128`, `network-traffic`, and `Indicator`/`Sighting` land in
+OpenCTI, and that the `/128` matches RDAP).
+
+For an existing OpenCTI deployment, paste the commented
+`connector-whisper-logs` service from
+[docker-compose.yml](./docker-compose.yml) (or use
+[docker-compose.logs.yml](./docker-compose.logs.yml)) and set its
+`CONNECTOR_ID` to a fresh UUID.
 
 ## Behavior
 
