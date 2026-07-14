@@ -264,20 +264,25 @@ def _convert_dns(row: dict, refs: dict, when: datetime) -> list[Any]:
                     created_by_ref=_AUTHOR_ID,
                 )
             )
-        sighting_kwargs: dict[str, Any] = {
-            "id": pycti.StixSightingRelationship.generate_id(
-                indicator.id, [_AUTHOR_ID], when, when
-            ),
-            "sighting_of_ref": indicator.id,
-            "where_sighted_refs": [_AUTHOR_ID],
-            "first_seen": when,
-            "last_seen": when,
-            "count": 1,
-            "created_by_ref": _AUTHOR_ID,
-        }
-        if obs_id:
-            sighting_kwargs["observed_data_refs"] = [obs_id]
-        objects.append(stix2.Sighting(**sighting_kwargs))
+        # ``id=`` must appear literally at the Sighting() call site - the
+        # upstream Verified Linter (VC313) matches the call text and cannot
+        # see an id supplied through a **kwargs splat. Only the optional
+        # observed_data_refs stays conditional.
+        extra_refs: dict[str, Any] = {"observed_data_refs": [obs_id]} if obs_id else {}
+        objects.append(
+            stix2.Sighting(
+                id=pycti.StixSightingRelationship.generate_id(
+                    indicator.id, [_AUTHOR_ID], when, when
+                ),
+                sighting_of_ref=indicator.id,
+                where_sighted_refs=[_AUTHOR_ID],
+                first_seen=when,
+                last_seen=when,
+                count=1,
+                created_by_ref=_AUTHOR_ID,
+                **extra_refs,
+            )
+        )
         return objects
 
     # decision == allow (or unspecified): record the resolution + lookup.
