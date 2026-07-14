@@ -480,12 +480,7 @@ If connectors-sdk updates pycti, update these files together:
    "support_version": ">=7.260701.0"
    ```
 
-4. **the contributor guide** - Documentation reference
-   ```
-   Currently `7.260701.0`
-   ```
-
-All four must be in sync for consistency.
+All three must be in sync for consistency.
 
 ---
 
@@ -569,7 +564,7 @@ grep pycti src/requirements.txt
 # Update to match connectors-sdk@master
 curl https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connectors-sdk/pyproject.toml | grep '"pycti'
 
-# Update src/requirements.txt, .env.example, manifest, the contributor guide
+# Update src/requirements.txt, .env.example, manifest
 ```
 
 ---

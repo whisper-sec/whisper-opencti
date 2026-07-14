@@ -481,20 +481,15 @@ to `main` and `develop` - see
 [.github/workflows/ci.yml](./.github/workflows/ci.yml) for the live count
 and current status.
 
-#### Multi-Agent Workflow for Bug Fixes
+#### Contribution Workflow
 
-When fixing a bug, follow the **multi-agent orchestration workflow**:
+All changes follow a pre-PR validation workflow:
 
-1. **Propose solution** - Create feature branch, describe problem + proposed steps
-2. **Architect review** - Ask `connector-architect` agent to review & approve approach
-3. **Implement** - After approval, make changes and run local CI checks
-4. **QA validation** - Hand off to `connector-qa` agent for comprehensive testing
-5. **Docs update** - Ask `connector-docs` agent if README/guides need changes
-6. **Open PR** - Once all validations pass, open PR for human review
+- Create a feature branch (never commit directly to `develop` or `main`).
+- Run the local CI checks: `make lint && make test && make docker-build`.
+- Push the feature branch and open a PR for human review (no direct pushes to protected branches).
 
-See [the local tooling/skills/bug-fix-workflow/SKILL.md](./the local tooling/skills/bug-fix-workflow/SKILL.md) for the full workflow and examples.
-
-**Use this workflow for:**
+**Use a feature branch + full validation for:**
 - Bug fixes (especially those touching core logic)
 - Security issues
 - Constraint violations (RFC 1035, STIX ID generation, version mismatches)
@@ -504,22 +499,6 @@ See [the local tooling/skills/bug-fix-workflow/SKILL.md](./the local tooling/ski
 - Documentation-only changes
 - Test additions that don't change connector behavior
 - Simple configuration tweaks
-
-#### Pre-PR Validation
-
-All changes must follow the **pre-PR validation workflow**:
-- Create feature branch (never commit directly to `develop` or `main`)
-- Run local CI checks: `make lint && make test && make docker-build`
-- Push feature branch and open PR (no direct pushes to protected branches)
-
-See [the local tooling/skills/pre-pr-validation/SKILL.md](./the local tooling/skills/pre-pr-validation/SKILL.md) for the full workflow and troubleshooting.
-
-#### Available Agents & Skills
-
-- **Agents** (`the local tooling/agents/`) - `connector-developer`, `connector-architect`, `connector-qa`, `connector-docs`
-- **Skills** (`the local tooling/skills/`) - `opencti-connector`, `stix-id-generation`, `connector-validation`, `bug-fix-workflow`, `pre-pr-validation`, `ci-cd-pipeline`
-
-See [the contributor guide](./the contributor guide#subagents--skills) for descriptions of each agent and skill.
 
 ### Repository Layout
 
