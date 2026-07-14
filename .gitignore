@@ -46,7 +46,6 @@ config.yml
 *.log
 logs/
 
-# Claude Code harness state — ignore local settings, but share team agents/skills
-.claude/*
-!.claude/agents/
-!.claude/skills/
+# Local developer-harness / editor config — do not publish
+.claude/
+CLAUDE.md
