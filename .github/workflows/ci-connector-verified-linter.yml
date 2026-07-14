@@ -52,9 +52,7 @@ jobs:
           rsync -a \
             --exclude='.git' \
             --exclude='.github' \
-            \
             --exclude='.githooks' \
-            \
             --exclude='CODEOWNERS' \
             --exclude='LICENSE' \
             --exclude='NOTICE' \
