@@ -101,7 +101,9 @@ def test_process_message_inlines_value_and_limit_into_query(connector, helper, c
         columns=["n", "r", "m"], rows=[], statistics={}
     )
     connector._process_message(_v7_payload(observable))
-    args, _kwargs = client.execute_cypher.call_args
+    # The MAIN enrichment query is the first call; the canonical catalog
+    # procedures (whisper.assess / identify / explain) run after it.
+    args = client.execute_cypher.call_args_list[0].args
     query = args[0]
     assert "$value" not in query
     assert "$limit" not in query
@@ -211,8 +213,9 @@ def test_process_message_enriches_autonomous_system_via_asn_anchor(
     assert "Enriched AS15169" in result
 
     # Cypher template fired with the ASN anchor + AS-number-derived value,
-    # not the human-readable AS name.
-    query = client.execute_cypher.call_args[0][0]
+    # not the human-readable AS name. The main enrichment query is the first
+    # call; the canonical catalog procedures run after it.
+    query = client.execute_cypher.call_args_list[0].args[0]
     assert ":ASN" in query
     assert '"AS15169"' in query
     assert "Google LLC" not in query
@@ -1675,3 +1678,176 @@ def test_current_registrar_wins_when_node_is_also_previous_registrar(
     assert shared_descs == ["registrar"]
     # The previous-only registrar still surfaces as previous-registrar.
     assert prev_descs == ["previous-registrar"]
+
+
+# ---------------------------------------------------------------------------
+# Canonical whisper.security catalog enrichment (whisper.assess / identify /
+# explain). These run after the main + supplementary queries and fold the
+# authoritative catalog signals into a single Note attached to the seed.
+# ---------------------------------------------------------------------------
+
+
+def _canonical_side_effect(main_rows, *, identify=None, assess=None, explain=None):
+    """Dispatch the canonical CALL whisper.* procedures to scripted rows and
+    return ``main_rows`` (graph shape) for everything else. Supplementary
+    LINKS_TO / FEED_SOURCE / ANNOUNCED_BY queries return empty so the test
+    isolates the canonical Note.
+    """
+
+    def _se(query, *_args, **_kwargs):
+        if query.startswith("CALL whisper.identify"):
+            return CypherResult(
+                columns=["host", "canonical_name", "category", "roles"],
+                rows=identify or [],
+                statistics={},
+            )
+        if query.startswith("CALL whisper.assess"):
+            return CypherResult(
+                columns=["host", "label", "band", "coverage", "evidence"],
+                rows=assess or [],
+                statistics={},
+            )
+        if query.startswith("CALL whisper.explain"):
+            return CypherResult(
+                columns=["indicator", "score", "level", "explanation", "sources"],
+                rows=explain or [],
+                statistics={},
+            )
+        if ":LINKS_TO" in query:
+            cols = ["c"] if "count(m)" in query else ["n", "r", "m"]
+            return CypherResult(columns=cols, rows=[], statistics={})
+        if "FEED_SOURCE" in query and "LISTED_IN" in query:
+            return CypherResult(
+                columns=["threatScore", "threatLevel", "feedName"],
+                rows=[],
+                statistics={},
+            )
+        if "ANNOUNCED_BY" in query:
+            return CypherResult(columns=["seed", "asn"], rows=[], statistics={})
+        return CypherResult(columns=["n", "r", "m"], rows=main_rows, statistics={})
+
+    return _se
+
+
+def _canonical_note(bundle):
+    return [
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note"
+        and o.get("abstract") == "Whisper graph catalog assessment"
+    ]
+
+
+def test_canonical_enrichment_note_attached_for_ipv4(connector, helper, client):
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "185.220.101.33",
+    }
+    main_rows = [
+        {
+            "n": {"nodeId": "1", "label": "IPV4", "name": "185.220.101.33"},
+            "r": {"type": "RESOLVES_TO"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "tor.exit.test"},
+        }
+    ]
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        main_rows,
+        identify=[
+            {"canonical_name": "Tor", "category": "anonymizer", "roles": ["EXIT"]}
+        ],
+        assess=[
+            {
+                "host": "185.220.101.33",
+                "label": "malicious",
+                "band": "CRITICAL",
+                "coverage": "known-clean",
+                "evidence": ["feed-source:listed", "feed-source-count:7"],
+            }
+        ],
+        explain=[
+            {
+                "indicator": "185.220.101.33",
+                "score": 0.9,
+                "level": "CRITICAL",
+                "explanation": "Listed in 7 threat feeds",
+                "sources": ["x"],
+            }
+        ],
+    )
+
+    result = connector._process_message(_v7_payload(observable))
+    assert "Enriched" in result
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    notes = _canonical_note(bundle)
+    assert len(notes) == 1
+    content = notes[0]["content"]
+    assert "Tor (anonymizer)" in content
+    assert "band=CRITICAL" in content
+    assert "whisper.assess" in content
+    assert "whisper.explain" in content
+    assert "level=CRITICAL" in content
+    # Recipe docs deep-links are surfaced for the analyst.
+    assert "https://www.whisper.security/docs/recipes" in content
+
+
+def test_canonical_enrichment_note_attached_for_domain(connector, helper, client):
+    observable = {
+        "id": "domain-name--x",
+        "entity_type": "Domain-Name",
+        "value": "github.com",
+    }
+    main_rows = [{"h": {"nodeId": "1", "label": "HOSTNAME", "name": "github.com"}}]
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        main_rows,
+        identify=[
+            {
+                "canonical_name": "Github",
+                "category": "saas",
+                "roles": ["DNS_OPERATOR", "MAIL_RECEIVER"],
+            }
+        ],
+        assess=[{"host": "github.com", "label": "benign-allowlisted", "band": "INFO"}],
+        explain=[{"indicator": "github.com", "score": 0.0, "level": "NONE"}],
+    )
+
+    connector._process_message(_v7_payload(observable))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    notes = _canonical_note(bundle)
+    assert len(notes) == 1
+    content = notes[0]["content"]
+    assert "Github (saas)" in content
+    assert "DNS_OPERATOR" in content
+    assert "band=INFO" in content
+
+
+def test_canonical_enrichment_omits_note_when_procedures_have_nothing(
+    connector, helper, client
+):
+    # A seed Whisper knows nothing about (unknown/UNKNOWN posture, no identity,
+    # NONE level) must NOT produce a canonical Note.
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "192.0.2.1",
+    }
+    main_rows = [
+        {
+            "n": {"nodeId": "1", "label": "IPV4", "name": "192.0.2.1"},
+            "r": {"type": "RESOLVES_TO"},
+            "m": {"nodeId": "2", "label": "HOSTNAME", "name": "host.test"},
+        }
+    ]
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        main_rows,
+        identify=[{"canonical_name": None}],
+        assess=[{"label": "unknown", "band": "UNKNOWN"}],
+        explain=[{"indicator": "192.0.2.1", "score": 0.0, "level": None}],
+    )
+
+    connector._process_message(_v7_payload(observable))
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    assert _canonical_note(bundle) == []
