@@ -8,7 +8,6 @@ extend-exclude =
     __pycache__,
     .pytest_cache,
     .ruff_cache,
-    the local tooling,
     build,
     dist,
     *.egg-info
