@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import stix2
 from pycti import OpenCTIConnectorHelper
 
+from src.connector.catalog import CATALOG_RECIPES, get_canonical_enrichment_queries
 from src.connector.converter_to_stix import build_bundle, build_note
 from src.connector.exceptions import (
     StixMappingError,
@@ -373,6 +374,132 @@ class WhisperConnector:
             edge = entry.get("edge_type") or "(unknown edge)"
             lines.append(f"  - {entry['name']}  (Whisper edge: {edge})")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_canonical_content(
+        entity_value: str, results: dict[str, list[dict]]
+    ) -> str:
+        """Render the canonical-catalog enrichment Note from procedure rows.
+
+        ``results`` maps a procedure name (``whisper.identify`` /
+        ``whisper.assess`` / ``whisper.explain``) to the rows it returned. Only
+        procedures that carry a meaningful signal produce a line, so a seed
+        Whisper knows nothing about yields an empty string (and no Note).
+        """
+        lines: list[str] = []
+
+        identify_rows = results.get("whisper.identify") or []
+        if identify_rows:
+            row = identify_rows[0]
+            name = row.get("canonical_name")
+            if name:
+                category = row.get("category")
+                roles = row.get("roles")
+                label = str(name)
+                if category:
+                    label += f" ({category})"
+                if isinstance(roles, list) and roles:
+                    label += " - roles: " + ", ".join(str(r) for r in roles)
+                lines.append(f"Vendor / operator (whisper.identify): {label}")
+
+        assess_rows = results.get("whisper.assess") or []
+        if assess_rows:
+            row = assess_rows[0]
+            label = row.get("label")
+            band = row.get("band")
+            known = (label and label != "unknown") or (band and band != "UNKNOWN")
+            if known:
+                parts = [f"label={label}"]
+                if band:
+                    parts.append(f"band={band}")
+                coverage = row.get("coverage")
+                if coverage:
+                    parts.append(f"coverage={coverage}")
+                lines.append("Threat posture (whisper.assess): " + ", ".join(parts))
+                evidence = row.get("evidence")
+                if isinstance(evidence, list) and evidence:
+                    lines.append("  evidence: " + ", ".join(str(e) for e in evidence))
+
+        explain_rows = results.get("whisper.explain") or []
+        if explain_rows:
+            row = explain_rows[0]
+            level = row.get("level")
+            if level is not None:
+                score = row.get("score")
+                summary = f"level={level}"
+                if isinstance(score, (int, float)):
+                    summary += f", score={score:g}"
+                lines.append(f"Threat scoring (whisper.explain): {summary}")
+                explanation = row.get("explanation")
+                if isinstance(explanation, str) and explanation.strip():
+                    lines.append(f"  {explanation.strip()}")
+
+        if not lines:
+            return ""
+
+        header = f"Whisper graph catalog assessment for {entity_value}:"
+        procedures = sorted(results.keys())
+        footer = [
+            "",
+            "Canonical procedures: " + ", ".join(procedures),
+            "Recipes: "
+            + " | ".join(f"{r.slug} ({r.docs_url})" for r in CATALOG_RECIPES),
+        ]
+        return "\n".join([header, "", *lines, *footer])
+
+    def _collect_canonical_enrichment(
+        self,
+        entity_type: str,
+        entity_value: str,
+        observable: dict,
+    ) -> list[stix2.Note]:
+        """Run the canonical whisper.security catalog procedures for the seed.
+
+        Runs ``whisper.identify`` / ``whisper.assess`` / ``whisper.explain``
+        (whichever apply to ``entity_type``) and folds their authoritative
+        signals into a single Note attached to the seed. These are the same
+        procedures the catalog's ``indicator-enrichment`` and
+        ``infrastructure-mapping`` recipes are built on, so enrichment tracks
+        the catalog rather than a bespoke query set.
+
+        Each procedure is best-effort and independently guarded: one failing
+        (or a type it does not apply to) never sinks the others or the main
+        bundle.
+        """
+        queries = get_canonical_enrichment_queries(entity_type, entity_value)
+        if not queries:
+            return []
+
+        results: dict[str, list[dict]] = {}
+        for name, query in queries.items():
+            try:
+                result = self.client.execute_cypher(query)
+            except WhisperClientError as exc:
+                self.helper.connector_logger.error(
+                    "Whisper canonical procedure failed (continuing)",
+                    {"procedure": name, "value": entity_value, "error": str(exc)},
+                )
+                continue
+            results[name] = result.rows
+
+        if not results:
+            return []
+
+        content = self._format_canonical_content(entity_value, results)
+        if not content:
+            return []
+
+        seed_stix_id = self._seed_stix_id(entity_type, entity_value, observable)
+        if seed_stix_id is None:
+            return []
+
+        return [
+            build_note(
+                seed_stix_id=seed_stix_id,
+                content=content,
+                abstract="Whisper graph catalog assessment",
+            )
+        ]
 
     def _collect_threat_context(
         self,
@@ -947,6 +1074,21 @@ class WhisperConnector:
         nodes, edges, notes, total_ms = self._collect_domain_enrichment(
             entity_value, observable
         )
+
+        # Canonical whisper.security catalog assessment (identify / assess /
+        # explain). Best-effort: a failure here must not sink the main bundle.
+        try:
+            notes.extend(
+                self._collect_canonical_enrichment(
+                    "Domain-Name", entity_value, observable
+                )
+            )
+        except WhisperClientError as exc:
+            self.helper.connector_logger.error(
+                "Whisper canonical enrichment failed (continuing)",
+                {"value": entity_value, "error": str(exc)},
+            )
+
         return self._ship_enrichment(
             observable, entity_value, nodes, edges, notes, total_ms
         )
@@ -1065,6 +1207,21 @@ class WhisperConnector:
         extra_nodes.extend(net_nodes)
         extra_edges.extend(net_edges)
         extra_notes.extend(net_notes)
+
+        # Canonical whisper.security catalog assessment (assess / explain for
+        # ASN seeds; identify / assess / explain for IPs). Best-effort: a
+        # failure here must not block the main bundle or the other Notes.
+        try:
+            extra_notes.extend(
+                self._collect_canonical_enrichment(
+                    entity_type, entity_value, observable
+                )
+            )
+        except WhisperClientError as exc:
+            self.helper.connector_logger.error(
+                "Whisper canonical enrichment failed (continuing)",
+                {"entity_id": observable.get("id"), "error": str(exc)},
+            )
 
         if extra_nodes or extra_edges:
             seen_node_ids = {n["id"] for n in nodes}

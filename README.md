@@ -346,7 +346,11 @@ For each enrichment request the connector:
 7. For IPv4/IPv6 seeds, issues a supplementary 2-hop network-context query
    (announcing ASN via ANNOUNCED_PREFIX, ASN_NAME human label, static
    allocation PREFIX).
-8. Assembles a single STIX 2.1 bundle with the SCOs, SDOs, relationships,
+8. Runs the canonical [whisper.security catalog](https://github.com/whisper-sec/whisper-catalog)
+   procedures (`whisper.identify`, `whisper.assess`, `whisper.explain`) and
+   folds their authoritative signals into a single assessment Note (see
+   [Graph enrichment via the whisper.security catalog](#graph-enrichment-via-the-whispersecurity-catalog)).
+9. Assembles a single STIX 2.1 bundle with the SCOs, SDOs, relationships,
    and Notes, and ships it to OpenCTI for ingestion.
 
 See [docs/architecture.md](./docs/architecture.md) for the per-module deep
@@ -381,17 +385,60 @@ Per enrichment the bundle ships:
 - `related-to` relationships preserving the original Whisper edge type in
   `description`
 - `resolves-to` relationships (oriented domain → IP) for DNS records
-- Up to four analyst-visible `Note` SDOs attached to the seed:
+- Analyst-visible `Note` SDOs attached to the seed:
+  - `Whisper graph catalog assessment` - the canonical
+    `whisper.identify` / `whisper.assess` / `whisper.explain` signals, with
+    docs deep-links (see below)
   - `LINKS_TO neighbour overflow` — when Whisper has more than 25 LINKS_TO
     neighbours in either direction
-  - `Whisper threat intelligence` — score, level, true flags, ISO-8601
-    first/last seen, and feed listings (for threat-listed seeds)
+  - `Whisper threat intelligence` / `Whisper threat feed evidence` - score,
+    level, true flags, ISO-8601 first/last seen, and feed listings (for
+    threat-listed seeds)
   - `Whisper network context` — announced prefix, BGP flags
     (anycast/MOAS/withdrawn), ANNOUNCED_PREFIX threat level + score, static
     allocation (for IP seeds)
   - `Whisper dropped non-RFC-1035 DNS records` — names like
     `_spf.example.com` that Whisper has but OpenCTI rejects as malformed
     `domain-name` SCOs
+
+### Graph enrichment via the whisper.security catalog
+
+Beyond the graph-shape traversal above, the connector runs the **canonical
+[whisper.security catalog](https://github.com/whisper-sec/whisper-catalog)
+procedures** on every enriched observable, so its enrichment tracks the catalog
+rather than a bespoke query set:
+
+| Procedure | What it adds | Docs |
+| --- | --- | --- |
+| `whisper.identify` | Vendor / operator identity: canonical name, category, operator roles (DNS_OPERATOR / CDN / ORIGIN_AS / MAIL_RECEIVER) | [identify](https://www.whisper.security/docs/whisper-graph/procedures/identify) |
+| `whisper.assess` | Threat posture: label, band, coverage, evidence | [procedures](https://www.whisper.security/docs/whisper-graph/procedures) |
+| `whisper.explain` | Threat scoring: score, level, explanation, sources | [explain](https://www.whisper.security/docs/whisper-graph/procedures/explain) |
+
+These are the same procedures the catalog's
+[indicator-enrichment](https://www.whisper.security/docs/recipes/dns-email) and
+[infrastructure-mapping](https://www.whisper.security/docs/recipes/compliance)
+recipes are built on. Their signals fold into a single
+`Whisper graph catalog assessment` Note attached to the seed. `identify` is run
+for IP and Domain seeds (it returns nothing for a bare ASN); `assess` and
+`explain` run for every supported type.
+
+Example (IPv4 `185.220.101.33`, a Tor exit relay):
+
+```
+Whisper graph catalog assessment for 185.220.101.33:
+
+Threat posture (whisper.assess): label=malicious, band=CRITICAL, coverage=known-clean
+  evidence: coverage:known-clean, band:CRITICAL, host-class:unknown, feed-source:listed, feed-source-count:7
+Threat scoring (whisper.explain): level=CRITICAL, score=25.886
+  185.220.101.33 is listed in 7 threat feed(s). Score 25.9 (Low risk - may warrant monitoring).
+
+Canonical procedures: whisper.assess, whisper.explain, whisper.identify
+Recipes: indicator-enrichment (https://www.whisper.security/docs/recipes/dns-email) | infrastructure-mapping (https://www.whisper.security/docs/recipes/compliance)
+```
+
+The canonical procedure definitions live in
+[`src/connector/catalog.py`](./src/connector/catalog.py); update them there when
+the catalog changes.
 
 ## Debugging
 
