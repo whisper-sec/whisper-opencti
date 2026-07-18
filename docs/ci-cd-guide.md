@@ -609,13 +609,14 @@ curl https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connec
 
 # Check local requirement
 grep pycti src/requirements.txt
-# Output: pycti==7.260710.0
+# Output: pycti==7.260715.0
 
-# Not in sync as of this check - src/requirements.txt is one bump behind
-# connectors-sdk@master. This is the exact drift `uv pip check` in
-# ci-tests-connectors.yml watches for; bump src/requirements.txt (and
-# .env.example / the manifest's support_version in lockstep, below) if
-# this recurs.
+# In sync as of 2026-07-18 (bumped after upstream's 7.260715.0 release broke
+# resolution repo-wide for three days). Upstream cuts date-versioned releases
+# roughly weekly and each one moves the sdk's pycti pin, so this drift WILL
+# recur: it is the exact thing `uv pip check` in ci-tests-connectors.yml's
+# daily cron watches for. When it fires, bump src/requirements.txt (and
+# .env.example / the manifest's support_version in lockstep, below).
 ```
 
 ### Updating pycti
