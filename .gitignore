@@ -45,5 +45,3 @@ config.yml
 # Logs
 *.log
 logs/
-
-# Local developer-harness / editor config - do not publish
