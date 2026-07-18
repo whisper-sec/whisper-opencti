@@ -9,9 +9,12 @@
 # reason: this repo publishes its own image (ghcr.io/whisper-sec/whisper-opencti);
 # the opencti/connector-whisper image name only exists once the connector is
 # merged and released upstream. The manifest intentionally keeps our image.
-VC202: "container_image": "ghcr.io/whisper-sec/whisper-opencti" - expected "opencti/connector-whisper"
+# Pattern deliberately stops at the image name: the linter's trailing
+# "expected ..." phrasing/punctuation has changed upstream before (hyphen vs
+# em dash) and a longer fixed-string pattern silently stops matching.
+VC202: "container_image": "ghcr.io/whisper-sec/whisper-opencti"
 
 # reason: same as above - the user-facing docker-compose.yml snippet references
 # whisper-sec/whisper-opencti, the image actually published from this repo,
 # not the upstream opencti/connector-whisper name.
-VC401: Image name 'whisper-sec/whisper-opencti' does not match expected 'opencti/connector-whisper'
+VC401: Image name 'whisper-sec/whisper-opencti'
