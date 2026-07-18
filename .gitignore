@@ -47,3 +47,13 @@ config.yml
 logs/
 
 # Local developer-harness / editor config - do not publish
+# (per #93: WAW/Claude harness config stays local-only in this repo)
+.claude/
+CLAUDE.md
+
+# ── WAW generated artifacts (managed by /waw-init; do not commit) ──
+.claude/waw/runs/
+.claude/waw/archive/
+.claude/waw/state.json
+.claude/waw/*.local.*
+# Committed (do NOT ignore): workflow.json, project-notes.md, knowledge-graph.json, workflows/
