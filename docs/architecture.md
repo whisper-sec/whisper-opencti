@@ -1,6 +1,25 @@
+<!--
+  Provenance convention: substantive sections carry, directly under their
+  heading, an HTML comment of the form
+    source: <file/command the claims came from>, verified: <how>, date: <YYYY-MM-DD>
+  Keep the canonical top-level headings (## System Overview, ## Module Map,
+  ## Layer & Boundary Rules, ## Data Flow, ## External Dependencies,
+  ## Generated Artifacts, ## Decision Log) exactly as written: downstream
+  tooling and reviewers locate content by these headings. The
+  numbered narrative sections (## 1..## 8) are the deep-dive companion to the
+  canonical sections and are preserved verbatim.
+-->
+
 # Architecture
 
 Technical description of how `whisper-opencti` is structured and why. Intended audience: a new engineer onboarding to the codebase, or a reviewer auditing a non-trivial change. For "how do I run this" see [README.md](../README.md); for QA-facing test matrix see [docs/qa-handoff.md](qa-handoff.md).
+
+## System Overview
+<!-- source: __metadata__/connector_manifest.json, pyproject.toml, src/main.py, Dockerfile; verified: read; date: 2026-07-18 -->
+
+`whisper-opencti` is an **OpenCTI internal-enrichment connector**: a single long-lived Python 3.11+ process (packaged as a `python:3.12-alpine` container) that runs as a sidecar alongside an OpenCTI platform and reacts to enrichment requests. It is not a library or an OpenCTI plugin. Its users are OpenCTI analysts who click **Enrich → Whisper** on an observable (or wire it into a playbook chain); it consumes enrichment jobs off a RabbitMQ queue, queries the external **Whisper graph API** (WhisperGraph) over HTTPS with Cypher, maps the results to STIX 2.1, and publishes a STIX bundle back to OpenCTI.
+
+Scope is four observable types — `IPv4-Addr`, `IPv6-Addr`, `Domain-Name`, `Autonomous-System` (per `_DEFAULT_SCOPE` in `src/connector/settings.py` and the `CONNECTOR_SCOPE` env in the compose files). The connector is stateless and horizontally scalable by running multiple containers with distinct `CONNECTOR_ID`s. There is no persistent store it owns; all state lives in OpenCTI (ES/Mongo) and the Whisper API. The primary framework surface is `pycti.OpenCTIConnectorHelper` (GraphQL + RabbitMQ) plus the OpenCTI `connectors-sdk` for config (`BaseConnectorSettings`). It is published as `ghcr.io/whisper-sec/whisper-opencti` and installed via a Docker Compose service snippet. Deep narrative on each concern follows in the numbered sections (§1–§8).
 
 ## 1. System context
 
@@ -55,31 +74,44 @@ Two gates run before `_enrich_observable` is reached (both added in the v7 callb
 
 Throughput is bounded by sequential per-message processing. For the MVP this is acceptable - enrichment is user-triggered, not bulk. Horizontal scale is by running multiple containers with **different** `CONNECTOR_ID`s (each a separate registered connector instance in OpenCTI).
 
+## Module Map
+<!-- source: src/ tree, src/connector/__init__.py, module docstrings, tools/gen_iana_registrars.py; verified: read; date: 2026-07-18 -->
+
+Every source module lives under [src/](../src/). The package is intentionally small and shallow — one entry point plus a single `connector` package. The `## 3. Module-by-module` section below is the per-module deep dive; this table is the index.
+
+| Module | Responsibility | Entry points |
+|---|---|---|
+| [`src/main.py`](../src/main.py) | Process entry point: builds `ConnectorSettings` (connectors-sdk) + `OpenCTIConnectorHelper`, retries the OpenCTI connection on cold boot, hands both to `WhisperConnector.run()`. Wrapped so any startup failure exits `1`. | `python -m src.main` (Dockerfile `ENTRYPOINT`) |
+| [`src/connector/connector.py`](../src/connector/connector.py) | Orchestration — the only class with side effects. `WhisperConnector._process_message` is the pycti callback: TLP + scope gates, dispatch to `_enrich_observable`, supplementary passes (LINKS_TO / threat / network context), bundle send. | `WhisperConnector` (re-exported from `src/connector/__init__.py`) |
+| [`src/connector/settings.py`](../src/connector/settings.py) | Typed config. `ConnectorSettings(BaseConnectorSettings)` with an `opencti:`/`connector:`/`whisper:` shape; `WhisperConfig` carries `api_url`/`api_key` (`SecretStr`)/`max_tlp`. | `ConnectorSettings`, `WhisperConfig` |
+| [`src/connector/queries.py`](../src/connector/queries.py) | `QUERIES` table + `get_query_for_entity_type` — maps entity type to a one-hop Cypher template and inlines JSON-escaped literals (the Whisper endpoint rejects bound params). Also holds the directed LINKS_TO / threat / network context query builders. | `QUERIES`, `get_query_for_entity_type` |
+| [`src/connector/whisper_client.py`](../src/connector/whisper_client.py) | The only network I/O against Whisper. `WhisperClient.execute_cypher` POSTs to `<api_url>/api/query`, `requests.Session` + retry policy, `X-API-Key` auth, HTTP→exception mapping, returns frozen `CypherResult`. | `WhisperClient`, `CypherResult` |
+| [`src/connector/result_parser.py`](../src/connector/result_parser.py) | Whisper rows → normalized `(nodes, edges)`. Reconstructs edge direction from column position, drops labels with no STIX equivalent, orients direction-sensitive edges, strips `AS` prefixes. Pure. | `parse_cypher_result`, `collect_dropped_hostnames` |
+| [`src/connector/converter_to_stix.py`](../src/connector/converter_to_stix.py) | Normalized `(nodes, edges)` → `stix2.Bundle`. Deterministic SCO/SDO/Relationship/Note IDs (pycti `generate_id`), `WHISPER_AUTHOR` Identity, `NODE_MAPPERS` dispatch. Pure. | `build_bundle`, `build_note` |
+| [`src/connector/exceptions.py`](../src/connector/exceptions.py) | Error taxonomy — `WhisperClientError` hierarchy (`WhisperAuthError`/`WhisperTransportError`/`WhisperQueryError`), plus `StixMappingError` and `WhisperTlpError`. One class per failure mode at the Whisper boundary. | (exception classes) |
+| [`src/connector/iana_registrars.py`](../src/connector/iana_registrars.py) | **Generated** vendored reference data: `IANA_REGISTRAR_NAMES` (~4200 IANA registrar ID → name entries) so `REGISTRAR` nodes named `iana:<id>` resolve to a readable Identity SDO (issue #61). Do not hand-edit — see Generated Artifacts. | `IANA_REGISTRAR_NAMES` |
+| [`shared/pylint_plugins/check_stix_plugin/`](../shared/pylint_plugins/check_stix_plugin/) | Vendored upstream pylint plugin (`linter_stix_id_generator`) enforcing deterministic pycti ID generation (`no_generated_id_stix`). Lint-time only, not shipped in the image. | `make lint` / `stix_id_linter` CI job |
+| [`tools/gen_iana_registrars.py`](../tools/gen_iana_registrars.py) | Code generator for `iana_registrars.py` from the IANA registrar CSV. Dev-time only. | `python3 tools/gen_iana_registrars.py` |
+
 ## 3. Module-by-module
 
 The code is intentionally small and shallow. Six modules in [src/connector/](../src/connector/) plus an entry point.
 
 ### 3.1 [src/main.py](../src/main.py) - entry point
 
-Tiny - about 30 lines. Calls `load_yaml_config()` once for the optional `config.yml`, then `WhisperSettings.from_environment(yaml_config)` to build the typed settings (env-overrides-YAML), then `OpenCTIConnectorHelper(yaml_config, playbook_compatible=True)`, hands both to `WhisperConnector(helper, settings).run()`. Wrapped in `try/traceback.print_exc()/sys.exit(1)` so Docker reports the container as `Exited (1)` on any startup failure rather than silently looping.
+About 100 lines. `main()` builds `ConnectorSettings()` - the connectors-sdk `BaseConnectorSettings` model, which reads the `opencti:`/`connector:`/`whisper:` config from environment variables and an optional `config.yml` itself (no separate YAML-loading call needed - see §3.2) - then calls `_build_helper(settings.to_helper_config())` to construct `OpenCTIConnectorHelper(..., playbook_compatible=True)`, retrying quietly for up to ~10 minutes while OpenCTI/Elasticsearch is still booting on a cold stack (§7, "OpenCTI Startup Retry"). Hands both to `WhisperConnector(helper=helper, config=settings).run()`. The `__main__` block wraps `main()` in `try/traceback.print_exc()/sys.exit(1)` so Docker reports the container as `Exited (1)` on any startup failure rather than silently looping.
 
-### 3.2 [settings.py](../src/connector/settings.py) - Pydantic-validated config
+### 3.2 [settings.py](../src/connector/settings.py) - connectors-sdk config
 
-`WhisperSettings` is a `pydantic_settings.BaseSettings` subclass - matches the upstream OpenCTI-Platform/connectors convention (`virustotal`, `dnstwist`, etc.). Three fields:
+`ConnectorSettings` subclasses the OpenCTI `connectors-sdk`'s `BaseConnectorSettings` (per upstream PR review `OpenCTI-Platform/connectors#6708`), not a hand-rolled `pydantic_settings.BaseSettings` model. It adds two blocks on top of the SDK's `opencti:`/`connector:` base:
 
-- `api_url: str` - required, `min_length=1`. Plain `str` because `WhisperClient.__init__` takes a plain string.
-- `api_key: str` - required, `min_length=1`. Not `SecretStr` - we already control logging at the boundary (`WhisperClient._headers` never logs the key) and `SecretStr.get_secret_value()` would litter every consumer.
-- `max_tlp: Literal["TLP:WHITE" | "TLP:CLEAR" | "TLP:GREEN" | "TLP:AMBER" | "TLP:AMBER+STRICT" | "TLP:RED"]` - Pydantic enforces the canonical set at construction; the old regex-style `_validate()` check is gone.
+- `connector: _WhisperConnectorConfig` - subclasses the SDK's `BaseInternalEnrichmentConnectorConfig`, which pins `connector.type` to the literal `"INTERNAL_ENRICHMENT"` (non-overridable); overrides `name` (default `"Whisper"`) and `scope` (default `_DEFAULT_SCOPE = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "Autonomous-System"]`).
+- `whisper: WhisperConfig` - the connector-specific block, three fields:
+  - `api_url: str` - required, no default.
+  - `api_key: SecretStr` - required, no default. Masked in `repr()` and never logged; the connector reads it via `.get_secret_value()` only when constructing `WhisperClient`.
+  - `max_tlp: str` - defaults to `"TLP:AMBER+STRICT"`. **Plain `str`, not an enum/`Literal`** - there's no compile-time validation against the canonical TLP vocabulary. A typo'd value (e.g. `"TLP:AMBRE"`) passes construction and only surfaces later, at `OpenCTIConnectorHelper.check_max_tlp()` time (open question - see `docs/SPECIFICATIONS.md`'s Connector Configuration feature).
 
-`model_config = SettingsConfigDict(env_prefix="WHISPER_", frozen=True, extra="ignore", str_strip_whitespace=True)` gives us:
-
-- env vars are read at the `WHISPER_` prefix automatically (`WHISPER_API_URL`, `WHISPER_API_KEY`, `WHISPER_MAX_TLP`),
-- the settings instance is **immutable** after construction - catches "config drift" bugs in tests / refactors (a test can't accidentally lower `max_tlp` for everyone sharing the fixture),
-- unknown YAML keys are ignored rather than failing startup, so `whisper:` blocks can carry forward-compat keys this connector version doesn't understand yet.
-
-Construction goes through `WhisperSettings.from_environment(yaml_config)` in [main.py](../src/main.py). The classmethod composes the optional `whisper:` block from `config.yml` with environment variables, **env vars winning** - the same override semantics as the previous `pycti.get_config_variable` resolution. Tests build instances directly with keyword arguments (no YAML, no env) - the `make_config` fixture in `test_connector.py` is a small factory that overrides defaults like `max_tlp` for the TLP gate tests.
-
-`load_yaml_config(path=None)` is the small public helper that reads and parses `config.yml`. It returns the raw dict so the same value can be passed to both `OpenCTIConnectorHelper(...)` (which reads its own `OPENCTI__` / `CONNECTOR__` / `RABBITMQ__` keys out of it) and `WhisperSettings.from_environment(...)`.
+The SDK's own settings loader (`connectors_sdk.settings.base_settings._SettingsLoader`) does the environment/`config.yml` resolution - env vars win over `config.yml`, the same override semantics as the previous `pycti.get_config_variable` resolution - so `ConnectorSettings()` in [main.py](../src/main.py) needs no separate YAML-loading helper call. Tests build instances through a `StubConnectorSettings` subclass and the `make_config` fixture factory in [conftest.py](../tests/conftest.py), which override the SDK's config loading so tests get real Pydantic validation without touching env vars or `config.yml`.
 
 ### 3.3 [connector.py](../src/connector/connector.py) - orchestration
 
@@ -115,17 +147,18 @@ Unsupported entity types (`Url`, `StixFile`, `Email-Addr`) deliberately do not h
 
 `WhisperClient.execute_cypher` is the only function in the codebase that performs network I/O against Whisper.
 
-- **Transport.** `requests.Session` with `urllib3.Retry`. `total=3`, `backoff_factor=0.5`, `status_forcelist=(500, 502, 503, 504)`, `allowed_methods=frozenset(["POST"])`. POST must be opt-in to retries because it's not idempotent by default - we know it is for this endpoint (read-only Cypher), hence the explicit allowlist.
+- **Transport.** `requests.Session` with a `urllib3.Retry` subclass (`_RateLimitLoggingRetry`, which additionally logs one `info`-level line per 429 retry). `total=3`, `backoff_factor=0.5`, `status_forcelist=(429, 500, 502, 503, 504)`, `allowed_methods=frozenset(["POST"])`, honouring a `Retry-After` header on 429 (`respect_retry_after_header` defaults `True`). POST must be opt-in to retries because it's not idempotent by default - we know it is for this endpoint (read-only Cypher), hence the explicit allowlist.
 - **Auth.** `X-API-Key` header. Never logged - the key is held in a `_api_key` private and only read inside `_headers()`.
 - **Error mapping.**
   - 401 / 403 → `WhisperAuthError` (terminal - connector will keep failing until config is fixed).
+  - 429 after retries are exhausted → `WhisperTransportError` (deliberately not `WhisperQueryError`, so QA/triage reads it as a quota incident rather than a malformed-Cypher bug).
   - ≥500 after retries → `WhisperTransportError` (transient - the user can retry).
   - Other 4xx → `WhisperQueryError` (likely a query bug - surfaces with a 500-char body snippet for debugging).
   - `requests.RequestException` (DNS, connection reset, timeout) → `WhisperTransportError`.
   - JSON body with `"success": false` → `WhisperQueryError`.
 - **Response shape.** Returns a frozen `CypherResult` dataclass: `columns: list[str]`, `rows: list[dict]`, `statistics: dict`. `columns` is **required** - the result parser uses positional order in `columns` to reconstruct edge endpoints (see §3.5).
 
-**Known gap:** no 429-aware backoff. If Whisper rate-limits, the call surfaces as `WhisperQueryError` and the work item fails. Tracked as a follow-up.
+**429/5xx retry (issue #30).** `_RateLimitLoggingRetry` retries 429/500/502/503/504 responses up to `total=3` times with `backoff_factor=0.5`, honouring `Retry-After` on 429. For the common Whisper case of `Retry-After: 60` the worst-case hang is roughly three minutes. If Whisper is still rate-limiting after retries are exhausted, the call raises `WhisperTransportError` and the work item fails - there is still no rate-limit-bucket awareness across concurrent enrichments.
 
 ### 3.6 [result_parser.py](../src/connector/result_parser.py) - Whisper rows → normalized graph
 
@@ -184,6 +217,36 @@ Exception
 
 `connector.py` catches `WhisperClientError` and `StixMappingError` separately so it can log structured context (entity_id, error) before re-raising. The re-raise is what marks the work item failed.
 
+## Data Flow
+<!-- source: src/connector/connector.py, src/main.py; verified: read; date: 2026-07-18 -->
+
+One flow, one owner of each piece of state:
+
+```
+OpenCTI UI (analyst clicks Enrich → Whisper)
+      │
+      ▼  OpenCTI worker publishes v7 payload
+RabbitMQ (connector queue)   ── owned by OpenCTI ──
+      │
+      ▼  pycti consumer thread → WhisperConnector._process_message(data)
+[ TLP gate ] ─ fail → return status string, no Whisper call
+      │ pass
+[ scope gate ] ─ out-of-scope + no event_type → _send_passthrough_bundle (playbook)
+      │ in scope
+_enrich_observable
+      │
+      ├── WhisperClient.execute_cypher()  ──HTTPS POST /api/query (X-API-Key)──▶ Whisper graph API
+      │                                    ◀── CypherResult(columns, rows, statistics)
+      ├── parse_cypher_result()            [pure]  rows → (nodes, edges)
+      ├── build_bundle()                   [pure]  (nodes, edges) → stix2.Bundle
+      └── helper.send_stix2_bundle()       ──AMQP/GraphQL──▶ OpenCTI worker → ES/Mongo
+      │
+      ▼
+return work-item status string (shown in OpenCTI UI)
+```
+
+State ownership: **no store is owned by this connector.** RabbitMQ (job queue) and Elasticsearch/Mongo (bundle ingest) are owned by the OpenCTI platform; the Whisper graph is owned by the external Whisper API. The connector holds only in-process, per-message state. Idempotency is a property of the STIX IDs, not of a store the connector keeps (see §3.7). The concrete step-by-step trace for `IPv4-Addr 8.8.8.8` follows in §4.
+
 ## 4. Data flow: one enrichment, end-to-end
 
 Concrete trace for `IPv4-Addr 8.8.8.8` under the v7 callback contract:
@@ -232,17 +295,17 @@ Two layers, env vars override YAML:
 - **Env vars** - primary. [.env.example](../.env.example) is the committed single-source-of-truth template (working dev defaults + production guidance in comments). `cp .env.example .env` then edit; the Makefile reads `.env` only.
 - **`config.yml`** - optional, loaded from the repo root if present. See [config.yml.sample](../config.yml.sample). Shape mirrors the env-var structure under `opencti:` / `connector:` / `whisper:` keys.
 
-Resolution happens in `WhisperSettings.from_environment` (see §3.2) at startup time - `main.py` builds the settings once, then hands the frozen Pydantic object to `WhisperConnector(helper, settings)`. Tests construct `WhisperSettings` instances directly via the `make_config` factory fixture, bypassing env / YAML resolution entirely.
+Resolution happens inside `ConnectorSettings()` itself (see §3.2) at startup time - the connectors-sdk's `BaseConnectorSettings` reads environment variables and an optional `config.yml`, env vars winning. `main.py` builds the settings once, then hands the frozen object to `WhisperConnector(helper=helper, config=settings)`. Tests construct `ConnectorSettings` instances via the `make_config` factory fixture (backed by a `StubConnectorSettings` subclass), bypassing env / YAML resolution entirely.
 
 Connector-side variables today:
 
 | Env var | YAML path | Default | Notes |
 |---|---|---|---|
 | `WHISPER_API_URL` | `whisper.api_url` | - (required) | Base URL of the Whisper graph API. |
-| `WHISPER_API_KEY` | `whisper.api_key` | - (required) | API key sent in the `X-API-Key` header. Never logged. |
-| `WHISPER_MAX_TLP` | `whisper.max_tlp` | `TLP:AMBER+STRICT` | TLP ceiling for the TLP gate in §3.3. Allowed values: `TLP:WHITE`, `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT`, `TLP:RED`. Set to `TLP:RED` to disable the gate (effectively). |
+| `WHISPER_API_KEY` | `whisper.api_key` | - (required) | API key sent in the `X-API-Key` header. `SecretStr` - masked in `repr()`, never logged. |
+| `WHISPER_MAX_TLP` | `whisper.max_tlp` | `TLP:AMBER+STRICT` | TLP ceiling for the TLP gate in §3.3. Plain `str` field - not enum/pattern-constrained at construction time, so a typo'd value only fails later, at `OpenCTIConnectorHelper.check_max_tlp()` time (open question, see `docs/SPECIFICATIONS.md`). Canonical values in practice: `TLP:WHITE`, `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT`, `TLP:RED`. Set to `TLP:RED` to disable the gate (effectively). |
 
-`OPENCTI_*` and `CONNECTOR_*` env vars are read by the helper itself out of the same YAML dict; they don't flow through `WhisperSettings`. See [README.md §Configuration](../README.md#configuration) for the full list.
+`OPENCTI_*` and `CONNECTOR_*` env vars are read by the connectors-sdk's own `opencti:`/`connector:` blocks (and by the helper out of `to_helper_config()`); they don't flow through the `whisper:` block above. See [README.md §Configuration](../README.md#configuration) for the full list.
 
 ## 6. Deployment topology
 
@@ -255,7 +318,7 @@ The `Dockerfile` is a single-stage `python:3.12-alpine` build: non-root user (UI
 
 ## 7. Testing strategy
 
-Seven test files in [tests/](../tests/), 197 cases total, all unit tests. No live network calls.
+Seven test files in [tests/](../tests/), 200 cases total, all unit tests. No live network calls. (`.venv-sdk/bin/python -m pytest --collect-only -q` collects 200; see `docs/TESTING.md`'s Test Pyramid for how this number is tracked.)
 
 | File | Covers | Technique |
 |---|---|---|
@@ -278,7 +341,64 @@ These are not bugs - they're MVP design decisions, documented at the spec level.
 3. **Most edge semantics collapse to `related-to`.** Only `RESOLVES_TO` has a dedicated STIX mapping. Adding `NAMESERVER_FOR`, `MAIL_FOR`, etc., requires custom STIX relationship types - not just table entries.
 4. **`Url`, `StixFile` are explicitly out of scope.** Whisper has no native label.
 5. **`Email-Addr` is supported in the mapper but has no query template.** Adding it is a one-line addition to `QUERIES`.
-6. **No 429-aware backoff.** Whisper rate-limit responses fail the work item.
+6. **Rate-limit handling is bounded, not unlimited.** 429s are retried up to `total=3` times honouring `Retry-After` (alongside 5xx, via `_RateLimitLoggingRetry` in `whisper_client.py`); only sustained rate-limiting after retries are exhausted surfaces as `WhisperTransportError` and fails the work item. There is still no rate-limit-bucket awareness across concurrent enrichments.
 7. **IPs returned with `HOSTNAME` label** (Whisper data quirk for some IPs like `8.8.4.4`) surface as `domain-name` SCOs with IP-shaped values. STIX accepts it; downstream consumers may not. Mitigation would be IP-format detection inside `_translate_node`.
 
 Each of these has a corresponding entry in [docs/qa-handoff.md §4](qa-handoff.md).
+
+## Layer & Boundary Rules
+<!-- source: src/connector/*.py import graph, src/connector/__init__.py, shared/pylint_plugins/, Dockerfile; verified: read import statements; date: 2026-07-18 -->
+
+The package is a shallow layered pipeline; imports flow one direction only. The rules below are what code review and the architecture agent enforce against the actual import graph.
+
+- **Pure layers must not do I/O.** `queries.py`, `result_parser.py`, and `converter_to_stix.py` are pure (no network, no logging beyond errors). Only `whisper_client.py` performs Whisper network I/O and only `connector.py` performs OpenCTI I/O (via `helper`). A pure module importing `requests`/`pycti` for calls is a boundary violation.
+- **Single network boundary per external system.** All Whisper HTTP goes through `WhisperClient.execute_cypher`; all OpenCTI GraphQL/AMQP goes through the injected `OpenCTIConnectorHelper`. No other module may import `requests` for calls or call `helper.send_*` directly. This keeps auth (`X-API-Key`), retries, and error mapping in one place.
+- **Dependency direction is one-way toward the boundary.** `connector.py` imports the pure modules + `whisper_client` + `settings` + `exceptions`; the pure modules import only `exceptions` (and stdlib/`stix2`/`pycti` for ID generation). No pure module imports `connector.py` or `whisper_client.py`. `main.py` imports `connector` and `settings` only — nothing imports `main`.
+- **The package's only public export is `WhisperConnector`.** `src/connector/__init__.py` re-exports just `WhisperConnector`; other modules are reached by explicit `src.connector.<module>` imports internally. Consumers (only `main.py`) should not deep-import internal helpers.
+- **STIX IDs must be deterministic — enforced, not conventional.** SCOs get library-derived IDs (never pass `id=`); SDOs, `Relationship`, and `Note` get `pycti.*.generate_id`. The vendored `linter_stix_id_generator` pylint plugin fails the build (`no_generated_id_stix`) on any non-deterministic ID. Never reintroduce a custom UUID namespace (see §3.7 and Decision Log).
+- **The Whisper Cypher boundary rejects bound parameters.** Values are inlined as JSON-escaped Cypher literals in `queries.py` only. Do not add a `params` field or route user-controlled values into Cypher outside `get_query_for_entity_type` (see §3.4).
+- **Config is frozen and centralized.** All config comes through `ConnectorSettings` (connectors-sdk `BaseConnectorSettings`); the API key is a `SecretStr` never logged. Modules receive config by injection, not by reading env directly (except `main.py`'s startup-retry budget env reads).
+
+## External Dependencies
+<!-- source: import grep across src/, whisper_client.py, settings.py, .env.example, docker-compose.base.yml; verified: read; date: 2026-07-18 -->
+
+The integration surface is small and, by the boundary rules above, centralized. "Send →" / "recv ←" describe data crossing each boundary. Auth is given as env-var **names** only, never values.
+
+| Category | Service (SDK/pkg) | Integration surface (module) | Data crossing (send → / recv ←) | Auth (env var name) | Failure impact | Ops |
+|---|---|---|---|---|---|---|
+| Threat-intel graph API | Whisper graph API (`requests`) | [`src/connector/whisper_client.py`](../src/connector/whisper_client.py) (`WhisperClient.execute_cypher`, POST `<api_url>/api/query`) | send → Cypher query string (observable value inlined); recv ← `CypherResult` (columns/rows/statistics) | `WHISPER_API_URL`, `WHISPER_API_KEY` (sent as `X-API-Key`) | Hard-fail per enrichment: `WhisperAuthError` (401/403), `WhisperTransportError` (5xx/network), `WhisperQueryError`; the work item fails. Connector still boots. | — |
+| CTI platform (host) | OpenCTI (`pycti.OpenCTIConnectorHelper`, `connectors-sdk`) | [`src/connector/connector.py`](../src/connector/connector.py) via injected `helper`; config in [`src/connector/settings.py`](../src/connector/settings.py) | send → STIX bundle (`send_stix2_bundle`), work-item status string; recv ← v7 enrichment callback payload, RabbitMQ jobs, GraphQL health check | `OPENCTI_URL`, `OPENCTI_TOKEN`, `CONNECTOR_ID` (+ `CONNECTOR_*`) | Hard-fail at startup: helper health-checks OpenCTI on construction and raises if unreachable (retried by `_build_helper`, ~10 min budget) then exits 1. | See [docs/PLATFORMS.md](PLATFORMS.md) if present |
+| STIX serialization | `stix2` (3.0.1) | [`src/connector/converter_to_stix.py`](../src/connector/converter_to_stix.py) | in-process only (builds SCO/SDO/Relationship/Note/Bundle objects) | — | Build error → `StixMappingError`, work item fails. | — |
+| Reference data (offline) | IANA Registrar IDs registry | [`src/connector/iana_registrars.py`](../src/connector/iana_registrars.py) (vendored, generated) | none at runtime (static dict); fetched only at regen time by [`tools/gen_iana_registrars.py`](../tools/gen_iana_registrars.py) | — | Stale-data only: unknown registrar IDs fall back rather than fail. | — |
+
+Notes:
+- The connector calls exactly **one** external HTTP API at runtime (Whisper). OpenCTI is the host platform, reached only through `pycti`/`connectors-sdk`, never by direct HTTP from this code. There are no analytics, storage, payments, email, or CMS integrations.
+- `connectors-sdk` is installed from a git requirement (`git+https://github.com/OpenCTI-Platform/connectors.git@master#subdirectory=connectors-sdk`), not PyPI, and pins the exact `pycti` version — see the pin-drift guard in `ci-tests-connectors.yml`.
+
+## Generated Artifacts (never hand-edit)
+<!-- source: tools/gen_iana_registrars.py, iana_registrars.py header, Dockerfile, .env.example, config.yml.sample, .github/workflows/release.yml; verified: read; date: 2026-07-18 -->
+
+The artifacts below are generated in the sense that a tool or template produces them, but they are committed and (for `iana_registrars.py`) tracked by the repo. Regenerate rather than hand-edit.
+
+| Artifact | Generated by | Regenerate with |
+|---|---|---|
+| [`src/connector/iana_registrars.py`](../src/connector/iana_registrars.py) | [`tools/gen_iana_registrars.py`](../tools/gen_iana_registrars.py) from the IANA Registrar IDs CSV | `curl -s https://www.iana.org/assignments/registrar-ids/registrar-ids-1.csv \| python3 tools/gen_iana_registrars.py > src/connector/iana_registrars.py` |
+| `.env` (local, gitignored) | Copied from the [`.env.example`](../.env.example) template | `cp .env.example .env` (then set `WHISPER_API_KEY`) |
+| `config.yml` (optional, gitignored) | Copied from [`config.yml.sample`](../config.yml.sample) | `cp config.yml.sample config.yml` |
+| `ghcr.io/whisper-sec/whisper-opencti` image | [`.github/workflows/release.yml`](../.github/workflows/release.yml) on a `v*` tag (multi-arch build/push) | Push a `vX.Y.Z` tag; CI builds `linux/amd64,linux/arm64` and publishes to GHCR |
+
+Note: `.env` and `config.yml` carry `WHISPER_API_KEY` / OpenCTI tokens and must **never** be committed — only `.env.example` and `config.yml.sample` are tracked.
+
+## Decision Log
+<!-- source: module docstrings, referenced issues/PRs, git history; verified: read source docstrings & history; date: 2026-07-18 -->
+
+Append-only, newest first. Each records a decision, the "why", and the alternative rejected — so a future change doesn't relitigate it.
+
+- **2026-07 — Config on connectors-sdk `BaseConnectorSettings`, not a hand-rolled pydantic-settings model.** Per upstream review (`OpenCTI-Platform/connectors#6708`), `settings.py` now uses the SDK's `BaseConnectorSettings` / `BaseInternalEnrichmentConnectorConfig` with a `WhisperConfig` `whisper:` block; `api_key` is a `SecretStr`. Rejected: the previous bespoke `WhisperSettings.from_environment` model (matches upstream convention, less drift risk). *(§3.2 / §5 reconciled to this model during the 2026-07-18 verification pass.)*
+- **2026-07 — 429s log via a `_RateLimitLoggingRetry` subclass of `urllib3.Retry`.** `whisper_client.py` emits one info-level log per 429 so ops can correlate rate-limit spikes with quota windows without raising urllib3's whole logger. Rejected: default urllib3 WARN-level retry logging (too coarse). *(§3.5 and §8 item 6 reconciled to this behavior during the 2026-07-18 verification pass.)*
+- **2026-07 (issue #65) — Adopt the pycti v7 internal-enrichment callback contract.** `_process_message` receives `{enrichment_entity, stix_entity, stix_objects, event_type}` directly; no separate `stix_cyber_observable.read` round-trip. Added the TLP and scope gates and `playbook_compatible=True` passthrough. Rejected: the pre-v7 read-then-enrich shape.
+- **2026-07 (issue #61) — Vendor the IANA registrar ID→name table as generated code.** `iana_registrars.py` resolves opaque `iana:<id>` `REGISTRAR` nodes to readable Identity SDOs. Rejected: a runtime lookup against IANA (adds a network dependency and latency for static data).
+- **connectors-sdk migration — Deterministic STIX IDs via pycti `generate_id`; removed the custom `WHISPER_NAMESPACE` UUIDv5 scheme.** SCOs use library-derived IDs, SDOs/Relationships/Notes use `pycti.*.generate_id` — the same helpers OpenCTI uses server-side, so enrichments dedup instead of duplicating. Enforced by the vendored `linter_stix_id_generator` pylint check. Rejected (and forbidden): any custom UUID namespace, which would silently fork every SDO/relationship.
+- **Foundational — Inline JSON-escaped Cypher literals instead of bound parameters.** Whisper's Cypher endpoint has no request-body `params` field, so `queries.py` inlines a JSON-escaped, double-quoted literal for `$value` and an integer literal for `$limit`. Rejected: bound parameters (every query would fail against this API).
+- **Foundational — Single-stage `python:3.12-alpine` image, exec-form entrypoint, no shell shim.** `ENTRYPOINT ["python", "-m", "src.main"]`; the upstream Verified linter (VC402) forbids an `entrypoint.sh`. Non-root UID 10001 (OpenCTI convention). Rejected: a shell-wrapper entrypoint (linter failure; python is PID 1 either way so SIGTERM reaches the process).
+- **Foundational — Lint/test toolchain mirrors upstream `OpenCTI-Platform/connectors` exactly.** isort + black + flake8 (`--ignore=E,W`) + narrow pylint check set; CI replicates upstream's `ci-*` workflows. Rejected: modernizing to ruff or a full pylint sweep (upstream parity is the point — see `docs/ci-cd-guide.md` and project notes).
