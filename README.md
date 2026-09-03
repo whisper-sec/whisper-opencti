@@ -563,4 +563,4 @@ for the authoritative list. The headline items today:
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](./LICENSE).
+Licensed under the [MIT License](./LICENSE).
