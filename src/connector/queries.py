@@ -45,6 +45,12 @@ THREAT_FEED_LIMIT = 100
 # realistic; 10 is generous. Issue #48 Phase C.
 NETWORK_CONTEXT_LIMIT = 10
 
+# Whisper counts depth as the sum of relationship patterns over every
+# MATCH/OPTIONAL MATCH clause; ANONYMOUS plan maxQueryDepth is 2 (CALL
+# whisper.quota()), FREE is 3; every template here must stay <= 2 so the
+# connector works on any plan.
+MAX_QUERY_DEPTH = 2
+
 # Threat-flag boolean fields carried on threat-listed HOSTNAME/IPV4/IPV6
 # nodes. Listed in the order they appear in the Note output. Issue #48
 # Phase B surfaces these so analysts see the threat context Whisper has
@@ -200,13 +206,13 @@ def get_threat_context_query(
     )
 
 
-# IP → ASN/prefix supplementary query. Anchors on the seed IPv4/IPv6 node,
-# walks ANNOUNCED_BY→ANNOUNCED_PREFIX→ROUTES→ASN to derive the announcing
-# AS (intentional 2-hop chain - IPs don't connect directly to ASNs in
-# Whisper's schema), then OPTIONAL-MATCHes the ASN's HAS_NAME human label
-# and the IP's static-allocation PREFIX. Returns ``ip`` and ``asn`` as full
-# node cells so the caller can lift Whisper nodeIds for edge wiring;
-# everything else comes back as flat columns the caller folds into a Note.
+# Network context is split across three supplementary queries to keep every
+# template within Whisper's ANONYMOUS depth budget of 2. The IP→announced
+# prefix→ASN query uses the full two-hop budget; batched ASN-name lookup and
+# IP→static-prefix lookup are separate one-hop queries. The network-context
+# query returns ``ip`` and ``asn`` as full node cells so the caller can lift
+# Whisper nodeIds for edge wiring; announced-prefix properties are flat
+# columns the caller folds into a Note.
 #
 # Skipped for Domain-Name and Autonomous-System seeds - for Domain-Name
 # the network context lives on the resolved IPs (analyst can pivot), and
@@ -215,34 +221,43 @@ NETWORK_CONTEXT_QUERIES: dict[str, str] = {
     "IPv4-Addr": (
         "MATCH (ip:IPV4 {name: $value})-[:ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)"
         "-[:ROUTES]->(asn:ASN) "
-        "OPTIONAL MATCH (asn)-[:HAS_NAME]->(asn_name:ASN_NAME) "
-        "OPTIONAL MATCH (ip)-[:BELONGS_TO]->(p:PREFIX) "
         "RETURN ip AS seed, asn AS asn, "
-        "asn_name.name AS asnDescription, "
         "ap.name AS announcedPrefix, "
         "ap.threatScore AS apThreatScore, "
         "ap.threatLevel AS apThreatLevel, "
         "ap.isAnycast AS isAnycast, "
         "ap.isMoas AS isMoas, "
-        "ap.isWithdrawn AS isWithdrawn, "
-        "p.name AS prefix "
+        "ap.isWithdrawn AS isWithdrawn "
         "LIMIT $limit"
     ),
     "IPv6-Addr": (
         "MATCH (ip:IPV6 {name: $value})-[:ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)"
         "-[:ROUTES]->(asn:ASN) "
-        "OPTIONAL MATCH (asn)-[:HAS_NAME]->(asn_name:ASN_NAME) "
-        "OPTIONAL MATCH (ip)-[:BELONGS_TO]->(p:PREFIX) "
         "RETURN ip AS seed, asn AS asn, "
-        "asn_name.name AS asnDescription, "
         "ap.name AS announcedPrefix, "
         "ap.threatScore AS apThreatScore, "
         "ap.threatLevel AS apThreatLevel, "
         "ap.isAnycast AS isAnycast, "
         "ap.isMoas AS isMoas, "
-        "ap.isWithdrawn AS isWithdrawn, "
-        "p.name AS prefix "
+        "ap.isWithdrawn AS isWithdrawn "
         "LIMIT $limit"
+    ),
+}
+
+ASN_NAME_QUERY: str = (
+    "UNWIND [$asn_names] AS a "
+    "MATCH (asn:ASN {name: a})-[:HAS_NAME]->(asn_name:ASN_NAME) "
+    "RETURN a AS asn, asn_name.name AS asnDescription LIMIT $limit"
+)
+
+STATIC_PREFIX_QUERIES: dict[str, str] = {
+    "IPv4-Addr": (
+        "MATCH (ip:IPV4 {name: $value})-[:BELONGS_TO]->(p:PREFIX) "
+        "RETURN p.name AS prefix LIMIT $limit"
+    ),
+    "IPv6-Addr": (
+        "MATCH (ip:IPV6 {name: $value})-[:BELONGS_TO]->(p:PREFIX) "
+        "RETURN p.name AS prefix LIMIT $limit"
     ),
 }
 
@@ -252,10 +267,46 @@ def get_network_context_query(
     value: str,
     limit: int = NETWORK_CONTEXT_LIMIT,
 ) -> str | None:
-    """Return the IP→ASN/prefix supplementary Cypher, or ``None`` if the
+    """Return the IP→ASN supplementary Cypher, or ``None`` if the
     entity type doesn't carry one (Domain-Name and Autonomous-System).
     """
     template = NETWORK_CONTEXT_QUERIES.get(entity_type)
+    if template is None:
+        return None
+    if not value:
+        raise ValueError("value is required")
+    limit_int = int(limit)
+    if limit_int < 1:
+        raise ValueError(f"limit must be >= 1, got {limit_int}")
+    return template.replace("$value", json.dumps(str(value))).replace(
+        "$limit", str(limit_int)
+    )
+
+
+def get_asn_name_query(
+    asn_names: list[str],
+    limit: int = NETWORK_CONTEXT_LIMIT,
+) -> str | None:
+    """Return a batched ASN human-name lookup, or ``None`` if empty."""
+    names = [name for name in asn_names if name]
+    if not names:
+        return None
+    limit_int = int(limit)
+    if limit_int < 1:
+        raise ValueError(f"limit must be >= 1, got {limit_int}")
+    inlined = ", ".join(json.dumps(name) for name in names)
+    return ASN_NAME_QUERY.replace("$asn_names", inlined).replace(
+        "$limit", str(limit_int)
+    )
+
+
+def get_static_prefix_query(
+    entity_type: str,
+    value: str,
+    limit: int = NETWORK_CONTEXT_LIMIT,
+) -> str | None:
+    """Return the IP→static-prefix lookup, or ``None`` if unsupported."""
+    template = STATIC_PREFIX_QUERIES.get(entity_type)
     if template is None:
         return None
     if not value:
