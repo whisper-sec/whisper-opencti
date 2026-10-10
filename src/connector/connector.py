@@ -578,9 +578,8 @@ class WhisperConnector:
                 if not description:
                     continue
                 for announcer in announcers_by_id.values():
-                    if (
-                        announcer["asn_name"] == asn_name
-                        and not announcer.get("description")
+                    if announcer["asn_name"] == asn_name and not announcer.get(
+                        "description"
                     ):
                         announcer["description"] = description
 

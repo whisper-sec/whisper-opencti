@@ -940,11 +940,7 @@ def _network_context_side_effect(
         if "BELONGS_TO" in query:
             if static_prefix_rows is None:
                 prefixes = sorted(
-                    {
-                        row["prefix"]
-                        for row in network_rows
-                        if row["prefix"] is not None
-                    }
+                    {row["prefix"] for row in network_rows if row["prefix"] is not None}
                 )
                 rows = [{"prefix": prefix} for prefix in prefixes]
             else:
@@ -1047,9 +1043,7 @@ def test_network_context_emits_as_sco_edge_and_note(connector, helper, client):
     assert "Static allocation: 8.8.8.8/32" in content
 
 
-def test_network_context_issues_three_depth_bounded_queries(
-    connector, helper, client
-):
+def test_network_context_issues_three_depth_bounded_queries(connector, helper, client):
     observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
@@ -1150,9 +1144,7 @@ def test_network_context_skips_lookups_when_no_announcer(connector, helper, clie
     assert not any(o["type"] == "autonomous-system" for o in bundle["objects"])
 
 
-def test_network_context_moas_batches_asn_names_in_one_query(
-    connector, helper, client
-):
+def test_network_context_moas_batches_asn_names_in_one_query(connector, helper, client):
     observable = {
         "id": "ipv4--x",
         "entity_type": "IPv4-Addr",
