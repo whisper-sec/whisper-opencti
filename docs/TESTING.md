@@ -19,11 +19,11 @@ whisper-opencti has exactly one automated layer, unit, plus a manual, human-run 
 
 | Layer | Framework | Lives in | What belongs here |
 |---|---|---|---|
-| unit | pytest | `tests/test_*.py` (7 files, fixtures in [conftest.py](../tests/conftest.py)) | Pure-function tests (`queries.py`, `result_parser.py`, `converter_to_stix.py`), the HTTP boundary mocked with `responses` (`whisper_client.py`), settings validation, and connector orchestration with `helper`/`client` test doubles. No live network calls anywhere in this layer. |
+| unit | pytest | `tests/test_*.py` (8 files, fixtures in [conftest.py](../tests/conftest.py)) | Pure-function tests (`queries.py`, `result_parser.py`, `converter_to_stix.py`), the HTTP boundary mocked with `responses` (`whisper_client.py`), settings validation, and connector orchestration with `helper`/`client` test doubles. No live network calls anywhere in this layer. |
 | integration | none (deliberate gap) | - | [docs/architecture.md](architecture.md) §7 says this directly: "no integration test against the live Whisper API in CI." |
 | e2e | manual QA pass | [docs/qa-handoff.md](qa-handoff.md) + [docs/scenarios/](scenarios/) | A person runs `make qa-up` (pulls the published GHCR image) against a full OpenCTI stack and works through the TC-01 to TC-20 test-case matrix by hand. Not automated, not a CI gate. |
 
-Running the suite locally (`.venv-sdk/bin/python -m pytest -q`, checked 2026-07-18) collects and passes **200 tests**. [architecture.md](architecture.md) §7 and [ci-cd-guide.md](ci-cd-guide.md) "Job 4: Tests" previously said 197 (a stale count against a live collection run) and have been reconciled to 200 as part of the 2026-07-18 verification pass.
+Running the suite locally (`.venv-sdk/bin/python -m pytest -q`, checked 2026-10-13) collects and passes **235 tests**. [architecture.md](architecture.md) §7 and [ci-cd-guide.md](ci-cd-guide.md) "Job 4: Tests" previously said 197 (a stale count against a live collection run) and were reconciled to 200 on 2026-07-18 and to 235 on 2026-10-13 (the catalog-procedures port added tests/test_catalog.py).
 
 CI runs the suite twice, for different reasons. `.github/workflows/ci.yml`'s `test` job runs plain `pytest` on Python 3.11 as one of five gating jobs. `.github/workflows/ci-tests-connectors.yml` additionally reinstalls `pycti` from `OpenCTI-Platform/opencti@master` before running on Python 3.12, plus a daily cron, specifically to catch `connectors-sdk`-side pin drift before it reaches a push - see that workflow's header comment for the reasoning.
 

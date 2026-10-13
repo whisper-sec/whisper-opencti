@@ -12,6 +12,7 @@ Hierarchical behavior spec: **Feature → Specification → Behaviour details**.
 - [LINKS_TO Web-Graph Sampling](#feature-links_to-web-graph-sampling) — capped directional web-hyperlink sampling for Domain-Name seeds
 - [Whisper Threat Intelligence Note](#feature-whisper-threat-intelligence-note) — threat score/level/flags/feed-listing summary attached to the seed
 - [IP Network Context (Announcing ASN)](#feature-ip-network-context-announcing-asn) — announcing-ASN SCO + prefix/BGP Note for IP seeds
+- [Whisper Graph Catalog Assessment Note](#feature-whisper-graph-catalog-assessment-note) — canonical `whisper.identify` / `whisper.assess` / `whisper.explain` signals folded into one Note on the seed
 - [Dropped Non-RFC-1035 DNS Record Note](#feature-dropped-non-rfc-1035-dns-record-note) — surfaces HOSTNAME records the parser can't ship as SCOs
 - [Domain SPF Policy Note](#feature-domain-spf-policy-note) — SPF mechanism summary for Domain-Name seeds
 - [Domain WHOIS Phone Contacts Note](#feature-domain-whois-phone-contacts-note) — WHOIS phone summary for Domain-Name seeds
@@ -196,6 +197,25 @@ Hierarchical behavior spec: **Feature → Specification → Behaviour details**.
 
 ---
 
+## Feature: Whisper Graph Catalog Assessment Note
+<!-- source: src/connector/catalog.py, src/connector/connector.py (_format_canonical_content, _collect_canonical_enrichment, the hooks in _enrich_domain and _enrich_observable); verified: tests/test_catalog.py, tests/test_connector.py (canonical section); date: 2026-10-13 -->
+
+### Specification: Canonical Catalog Procedures Folded Into One Note
+
+- **Trigger**: `_collect_canonical_enrichment(entity_type, value, observable)` runs after the main query and every other supplementary pass, for every supported seed type. `get_canonical_enrichment_queries` picks the procedures by type: `whisper.identify` + `whisper.assess` + `whisper.explain` for `IPv4-Addr` / `IPv6-Addr` / `Domain-Name`; `whisper.assess` + `whisper.explain` only for `Autonomous-System` (`identify` resolves hostnames to operators and returns nothing for a bare ASN) [`src/connector/catalog.py`](../src/connector/catalog.py); `tests/test_catalog.py`.
+- **Third-Party Interactions**: **Whisper Graph API** — one `CALL whisper.<procedure>(...) YIELD ... RETURN ...` per applicable procedure, the seed value inlined as a JSON-escaped Cypher string literal exactly as `queries.py` does [`src/connector/catalog.py`](../src/connector/catalog.py). These are the procedures the catalog's `indicator-enrichment` and `infrastructure-mapping` recipes are built on.
+- **State Changes**: at most one `Note` SDO (`abstract="Whisper graph catalog assessment"`) attached to the seed's STIX ID. Its content is deterministic for a given set of signals (the procedures footer lists every procedure that was requested, not only those that answered), so a re-run updates the same Note instead of adding a second one. Returned strings are folded onto one line and capped before rendering, so graph text cannot fake the Note's own structure. Domain-Name seeds carry the same "not an authoritative verdict" caveat as the threat feed evidence Note.
+
+**Behaviour details**
+
+- **Success Path**: the Note carries a `Vendor / operator (whisper.identify)` line when `canonical_name` is set, a `Threat posture (whisper.assess)` line when `label` or `band` is known (plus an `evidence:` line), and a `Threat scoring (whisper.explain)` line when `level` is set (plus the explanation), then the procedures and recipe docs links; `tests/test_connector.py` `test_canonical_enrichment_note_attached_for_ipv4` / `_for_domain`.
+- **Error Fallback — nothing known**: unknown label and band, no canonical name and no level (`level == "NONE"`, what `whisper.explain` returns for an unlisted seed, does not count, as in the threat-intel Note) produce **no Note** (`tests/test_connector.py` `test_canonical_enrichment_omits_note_when_procedures_have_nothing`).
+- **Error Fallback — one procedure fails**: a `WhisperQueryError` from one procedure is logged (`"Whisper canonical procedure failed (continuing)"`) and the other procedures still produce the Note; a `WhisperAuthError` or `WhisperTransportError` stops the remaining procedures for this seed (the next call would hit the same auth failure or rate limit) and the Note is built from what already answered; the main bundle and the other Notes ship either way (`tests/test_connector.py` `test_canonical_enrichment_one_procedure_failing_keeps_the_rest`).
+- **Error Fallback — malformed rows**: a row that is not a dict is skipped, and a formatting error is logged and drops only the catalog Note, never the bundle (`tests/test_connector.py` `test_canonical_enrichment_ignores_non_dict_rows`, `test_canonical_enrichment_render_error_drops_only_the_note`).
+- **Note**: a catalog Note alone (no mappable relationships) is enough to ship a bundle under the no-op guard, like the threat-intel Note (`tests/test_connector.py` `test_canonical_note_alone_ships_bundle`).
+
+---
+
 ## Feature: Dropped Non-RFC-1035 DNS Record Note
 <!-- source: src/connector/result_parser.py:69-144, src/connector/connector.py:1004-1051, 350-377, 931-939; verified: tests/test_connector.py:1234-1360, tests/test_result_parser.py:274-434; date: 2026-07-18 -->
 
@@ -277,7 +297,7 @@ Hierarchical behavior spec: **Feature → Specification → Behaviour details**.
 
 **Behaviour details**
 
-- **Success Path**: if `nodes` or `extra_notes` is non-empty AND (`edges` or `extra_notes` is non-empty), `build_bundle` runs, and if it produces at least one object, the bundle ships with status `"Enriched <value> with N STIX objects (query: <elapsed>ms)"` [`src/connector/connector.py:1124-1151`](../src/connector/connector.py). A threat-intel-only or LINKS_TO-overflow-only result (no mappable relationships but a Note present) still counts as shippable [`src/connector/connector.py:1113`](../src/connector/connector.py); `tests/test_connector.py:845-967`.
+- **Success Path**: if `nodes` or `extra_notes` is non-empty AND (`edges` or `extra_notes` is non-empty), `build_bundle` runs, and if it produces at least one object, the bundle ships with status `"Enriched <value> with N STIX objects (query: <elapsed>ms)"` [`src/connector/connector.py:1124-1151`](../src/connector/connector.py). A threat-intel-only, catalog-assessment-only or LINKS_TO-overflow-only result (no mappable relationships but a Note present) still counts as shippable [`src/connector/connector.py:1113`](../src/connector/connector.py); `tests/test_connector.py:845-967`.
 - **Error Fallback — nothing at all**: no nodes and no notes → `"No Whisper data for <value>"`, nothing sent [`src/connector/connector.py:1099-1104`](../src/connector/connector.py).
 - **Error Fallback — seed-only, no new context**: nodes exist (the seed itself, from a resolved supplementary pass) but no edges and no notes → `"No mappable Whisper relationships for <value>"` — "sending a bundle that only re-asserts the seed observable adds no new information to OpenCTI and produces a misleading 'Enriched' status" [`src/connector/connector.py:1106-1122`](../src/connector/connector.py); `tests/test_connector.py:114-143`.
 - **Error Fallback — STIX mapping failure**: `StixMappingError` from `build_bundle` is logged and **re-raised** — work item fails [`src/connector/connector.py:1124-1131`](../src/connector/connector.py).

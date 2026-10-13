@@ -85,6 +85,7 @@ Every source module lives under [src/](../src/). The package is intentionally sm
 | [`src/connector/connector.py`](../src/connector/connector.py) | Orchestration — the only class with side effects. `WhisperConnector._process_message` is the pycti callback: TLP + scope gates, dispatch to `_enrich_observable`, supplementary passes (LINKS_TO / threat / network context), bundle send. | `WhisperConnector` (re-exported from `src/connector/__init__.py`) |
 | [`src/connector/settings.py`](../src/connector/settings.py) | Typed config. `ConnectorSettings(BaseConnectorSettings)` with an `opencti:`/`connector:`/`whisper:` shape; `WhisperConfig` carries `api_url`/`api_key` (`SecretStr`)/`max_tlp`. | `ConnectorSettings`, `WhisperConfig` |
 | [`src/connector/queries.py`](../src/connector/queries.py) | `QUERIES` table + `get_query_for_entity_type` — maps entity type to a one-hop Cypher template and inlines JSON-escaped literals (the Whisper endpoint rejects bound params). Also holds the directed LINKS_TO / threat / network context query builders. | `QUERIES`, `get_query_for_entity_type` |
+| [`src/connector/catalog.py`](../src/connector/catalog.py) | The canonical whisper.security catalog procedures (`whisper.identify` / `whisper.assess` / `whisper.explain`) mirrored from the catalog: which apply per entity type, their YIELD columns and docs links, and `get_canonical_enrichment_queries`, which inlines the seed value the same way `queries.py` does. Pure. | `get_canonical_enrichment_queries`, `procedures_for`, `CATALOG_RECIPES` |
 | [`src/connector/whisper_client.py`](../src/connector/whisper_client.py) | The only network I/O against Whisper. `WhisperClient.execute_cypher` POSTs to `<api_url>/api/query`, `requests.Session` + retry policy, `X-API-Key` auth, HTTP→exception mapping, returns frozen `CypherResult`. | `WhisperClient`, `CypherResult` |
 | [`src/connector/result_parser.py`](../src/connector/result_parser.py) | Whisper rows → normalized `(nodes, edges)`. Reconstructs edge direction from column position, drops labels with no STIX equivalent, orients direction-sensitive edges, strips `AS` prefixes. Pure. | `parse_cypher_result`, `collect_dropped_hostnames` |
 | [`src/connector/converter_to_stix.py`](../src/connector/converter_to_stix.py) | Normalized `(nodes, edges)` → `stix2.Bundle`. Deterministic SCO/SDO/Relationship/Note IDs (pycti `generate_id`), `WHISPER_AUTHOR` Identity, `NODE_MAPPERS` dispatch. Pure. | `build_bundle`, `build_note` |
@@ -268,10 +269,11 @@ Concrete trace for `IPv4-Addr 8.8.8.8` under the v7 callback contract:
 6. Branch by `entity_type == "IPv4-Addr"` → template `MATCH (n:IPV4 {name: $value})-[r]-(m) WHERE type(r) <> "LINKS_TO" RETURN n, r, m LIMIT $limit`.
 7. `get_query_for_entity_type` inlines the value (`"8.8.8.8"` - JSON-escaped) and limit (`50`) into a Cypher string.
 8. `client.execute_cypher(query)` → POST `<WHISPER_API_URL>/api/query` → returns `CypherResult(columns=["n","r","m"], rows=[...], statistics={"executionTimeMs": 47})`.
-9. Three supplementary passes run sequentially, each best-effort (a `WhisperClientError` here doesn't sink the main bundle):
+9. Four supplementary passes run sequentially, each best-effort (a `WhisperClientError` here doesn't sink the main bundle):
    - `_collect_links_to` (Domain-Name seeds only) - directed LINKS_TO outbound/inbound + count queries; emits a `LINKS_TO neighbour overflow` Note if either direction exceeds the cap.
    - `_collect_threat_context` (HOSTNAME/IPV4/IPV6 seeds) - pulls the seed's `threatScore`, `threatLevel`, 13 boolean flags, and FEED_SOURCE listings into a `Whisper threat intelligence` Note.
    - `_collect_network_context` (IPv4/IPv6 seeds) - 2-hop chain to the announcing ASN; emits an `autonomous-system` SCO + `related-to` (`description="ANNOUNCED_BY"`) edge + a `Whisper network context` Note with prefix/BGP/ANNOUNCED_PREFIX-threat detail.
+   - `_collect_canonical_enrichment` (every seed type) - runs the canonical catalog procedures that apply (`whisper.identify` / `whisper.assess` / `whisper.explain`; `identify` is skipped for ASN seeds), each guarded on its own, and folds their signals into one `Whisper graph catalog assessment` Note.
 10. `parse_cypher_result(result)`:
     - For each row, classify cells: cell with `nodeId` → translated node; cell with `type` → edge.
     - For each edge, pair with nearest left + right translated node.
@@ -318,7 +320,7 @@ The `Dockerfile` is a single-stage `python:3.12-alpine` build: non-root user (UI
 
 ## 7. Testing strategy
 
-Seven test files in [tests/](../tests/), 200 cases total, all unit tests. No live network calls. (`.venv-sdk/bin/python -m pytest --collect-only -q` collects 200; see `docs/TESTING.md`'s Test Pyramid for how this number is tracked.)
+Eight test files in [tests/](../tests/), 235 cases total, all unit tests. No live network calls. (`.venv-sdk/bin/python -m pytest --collect-only -q` collects 200; see `docs/TESTING.md`'s Test Pyramid for how this number is tracked.)
 
 | File | Covers | Technique |
 |---|---|---|

@@ -58,7 +58,7 @@ on enriched domains.
 | Observables (SCOs) | The seed plus every related IP, domain, AS, and email address Whisper returned |
 | Locations and identities (SDOs) | Countries, cities, registrant organizations, registrars |
 | Relationships | `resolves-to` for DNS records; `related-to` for everything else, with the original Whisper edge type (for example `NAMESERVER_FOR`, `ANNOUNCED_BY`) preserved in the relationship description |
-| Notes | Threat intelligence evidence, IP network context, result-cap overflows, and data-quality details, attached to the seed |
+| Notes | Catalog assessment (operator identity, threat posture and score), threat intelligence evidence, IP network context, result-cap overflows, and data-quality details, attached to the seed |
 
 See [Data Mapping](./data-mapping.md) for the full field-level reference.
 

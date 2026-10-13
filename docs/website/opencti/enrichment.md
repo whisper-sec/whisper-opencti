@@ -68,6 +68,17 @@ For an `Autonomous-System` seed the connector runs the one-hop
 neighbourhood query: the organization behind the AS, its location, and
 related network entities, capped at 50 results.
 
+## Catalog assessment
+
+After the queries above, the connector runs the canonical whisper.security
+catalog procedures for the seed: `whisper.identify` (who operates it, for
+IP and domain seeds), `whisper.assess` (threat posture: label, band,
+coverage, evidence) and `whisper.explain` (score, level and a plain-language
+explanation). Their signals fold into one "Whisper graph catalog assessment"
+note on the seed, with links to the catalog docs. A seed the catalog knows
+nothing about gets no such note. Each procedure is best-effort: a failure
+never blocks the rest of the enrichment.
+
 ## Notes
 
 Notes carry what doesn't fit the STIX relationship model. All of them
@@ -75,6 +86,7 @@ attach to the seed and show up under **Analyses → Notes**:
 
 | Note | When it appears | What it contains |
 | --- | --- | --- |
+| Catalog assessment | The catalog has an identity, posture or score for the seed | Operator identity, threat posture with evidence, threat score and explanation, catalog docs links |
 | Threat intelligence | The seed is threat-listed | Score, level (`LOW` to `CRITICAL`), active threat flags, first/last seen, and the listing feeds |
 | Network context | IP seeds with an announcing ASN | Announced prefix, BGP flags, prefix threat level, static allocation |
 | Overflow notes | A pivot or link query hit its cap | The true neighbour count, so you know what's truncated |
