@@ -43,7 +43,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install libmagic (pycti runtime dep — needed for source imports)
+      - name: Install libmagic (pycti runtime dep - needed for source imports)
         run: sudo apt-get update && sudo apt-get install -y libmagic1
       - name: Install runtime + plugin deps
         run: |

@@ -1,0 +1,117 @@
+# Upstream CI parity - issue #89.
+#
+# Mirrors OpenCTI-Platform/connectors .github/workflows/ci-tests-connectors.yml
+# ("Tests Connectors") together with the run_test.sh pipeline that its test job
+# invokes. Upstream detects changed connectors, builds a matrix from every
+# tests/test-requirements.txt, then for each project run_test.sh creates an
+# isolated uv venv, installs the project's test requirements, force-installs
+# pycti from OpenCTI master, runs `uv pip check`, and finally pytest.
+#
+# Adaptations for this single-connector repo (upstream path:
+# internal-enrichment/whisper - here the connector lives at src/ + tests/):
+#   - Dropped the detect-test-files matrix job, build_test_matrix.py,
+#     RELEASE_REF branch resolution, and run_test.sh's git-diff change
+#     detection: there is exactly one connector, so the test job always runs
+#     against tests/test-requirements.txt with RELEASE_REF=master.
+#   - run_test.sh's steps are inlined as named workflow steps (same commands,
+#     same order) instead of a shared shell script.
+#   - Triggers are pull_request + push to main/develop (upstream uses monorepo
+#     path filters), PLUS schedule + workflow_dispatch - our addition:
+#     connectors-sdk@master pins an exact pycti version, and when upstream bumps
+#     that pin our src/requirements.txt pycti pin silently drifts. The daily
+#     cron makes `uv pip check` surface that drift without waiting for a push.
+#   - Added a failure-only diagnostic step comparing our pycti pin against the
+#     connectors-sdk@master pin so a drift failure is self-explaining.
+#   - Dropped the Codecov upload steps (no CODECOV_TOKEN in this repo).
+
+name: Tests Connectors
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  # Daily drift gate: catches connectors-sdk@master bumping its pycti pin
+  # (which breaks `uv pip check` here) even when nothing is pushed to this repo.
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Upstream: "Test ${{ matrix.name }}" - kept recognizable with the
+    # connector's upstream monorepo path as the matrix name.
+    name: Test internal-enrichment/whisper
+    runs-on: ubuntu-latest
+    env:
+      # Upstream resolves RELEASE_REF from the PR base branch; this repo always
+      # tracks upstream master (run_test.sh default: REF="${CIRCLE_TAG:-${RELEASE_REF:-master}}").
+      RELEASE_REF: master
+      VENV_NAME: .temp_venv
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: "auto"
+          python-version: "3.12"
+
+      - name: Install libmagic (pycti runtime dep)
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      # ---- run_test.sh pipeline, inlined ----------------------------------
+
+      - name: Create isolated virtual environment
+        run: uv venv -p 3.12 "$VENV_NAME"
+
+      - name: Install requirements
+        run: |
+          source "$VENV_NAME/bin/activate"
+          uv pip install -q -r tests/test-requirements.txt
+
+      - name: Install latest version of pycti
+        run: |
+          source "$VENV_NAME/bin/activate"
+          uv pip uninstall pycti
+          uv pip install -q "git+https://github.com/OpenCTI-Platform/opencti.git@${RELEASE_REF}#subdirectory=client-python"
+          uv pip freeze | grep "connectors-sdk\|pycti" || true
+
+      # The drift gate: connectors-sdk pins an exact pycti version; if the
+      # pycti just installed from OpenCTI master no longer satisfies it,
+      # dependencies are broken and this fails (run_test.sh: `uv pip check || exit 1`).
+      - name: Check dependency consistency (uv pip check)
+        run: |
+          source "$VENV_NAME/bin/activate"
+          uv pip check || exit 1  # exit if dependencies are broken
+
+      - name: Run tests
+        run: |
+          source "$VENV_NAME/bin/activate"
+          echo 'Installing pytest-cov and using explicit coverage arguments'
+          uv pip install -q pytest-cov
+          mkdir -p test_outputs/tests
+          python -m pytest tests --cov --cov-append \
+            --cov-report=xml --junitxml="test_outputs/tests/junit.xml" -q -rA  # exit non zero if no test run
+
+      # ---- our addition: make pycti pin drift self-explaining --------------
+
+      - name: Diagnose pycti pin drift
+        if: failure()
+        run: |
+          echo '::group::pycti pin comparison'
+          echo "Our pin (src/requirements.txt):"
+          grep pycti src/requirements.txt || echo "  (no pycti entry found)"
+          echo
+          echo "connectors-sdk@master pin (connectors-sdk/pyproject.toml):"
+          curl -fsSL https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connectors-sdk/pyproject.toml | grep pycti \
+            || echo "  (no pycti entry found)"
+          echo '::endgroup::'
+          echo "If these versions differ, bump the pycti pin in src/requirements.txt to match connectors-sdk@master (keep the two lines in that file bumped together)."

@@ -39,7 +39,7 @@ def test_build_helper_retries_until_opencti_reachable(monkeypatch):
 
 
 def test_build_helper_reraises_config_errors_immediately(monkeypatch):
-    # A missing token/url is not a transient "not reachable" condition —
+    # A missing token/url is not a transient "not reachable" condition -
     # retrying for minutes would only hide the misconfiguration.
     calls = {"n": 0}
 

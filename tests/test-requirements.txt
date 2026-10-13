@@ -1,5 +1,5 @@
 # Test-runtime deps. Matches the upstream OpenCTI-Platform/connectors
-# template convention — `tests/test-requirements.txt` is a self-contained
+# template convention - `tests/test-requirements.txt` is a self-contained
 # spec for what running `pytest` against this connector needs, separate
 # from the lint toolchain in `requirements-dev.txt`.
 #

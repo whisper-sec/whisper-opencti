@@ -105,7 +105,7 @@ def test_parse_unknown_edge_type_falls_back_to_related_to():
     _nodes, edges = parse_cypher_result(_result(rows))
     assert edges[0]["type"] == "related-to"
     # Even unknown / future Whisper edge types get their name preserved in
-    # the description — analysts can grep / filter on this.
+    # the description - analysts can grep / filter on this.
     assert edges[0]["properties"]["description"] == "SOME_UNKNOWN_EDGE"
 
 
@@ -288,7 +288,7 @@ def test_parse_drops_hostname_with_underscores_rfc1035_violation():
         }
     ]
     nodes, edges = parse_cypher_result(_result(rows))
-    # Only the seed survives — the underscored neighbour drops + the edge
+    # Only the seed survives - the underscored neighbour drops + the edge
     # touching it drops with it.
     assert [n["properties"]["value"] for n in nodes] == ["telus.ca"]
     assert edges == []
@@ -296,7 +296,7 @@ def test_parse_drops_hostname_with_underscores_rfc1035_violation():
 
 def test_parse_drops_hostname_with_other_invalid_chars():
     # Wildcards, leading hyphens, label > 63 chars, trailing dot, empty
-    # labels — anything outside RFC 1035 alnum/hyphen, hyphen-not-at-edge,
+    # labels - anything outside RFC 1035 alnum/hyphen, hyphen-not-at-edge,
     # label-1-to-63-chars should also be dropped.
     invalid_names = [
         "*.example.com",
@@ -314,7 +314,7 @@ def test_parse_drops_hostname_with_other_invalid_chars():
 
 def test_parse_keeps_valid_punycode_idn_hostname():
     # RFC-valid domain forms that include punycode IDN labels should pass
-    # the validation — e.g. `xn--example.com`.
+    # the validation - e.g. `xn--example.com`.
     rows = [
         {"n": {"nodeId": "1", "label": "HOSTNAME", "name": "xn--bcher-kva.example"}}
     ]
@@ -383,7 +383,7 @@ def test_collect_dropped_hostnames_handles_multiple_invalid_records():
 
 def test_collect_dropped_hostnames_ignores_ip_shaped_hostname_quirk():
     # Whisper data quirk: 8.8.4.4 is labelled HOSTNAME. The translator
-    # reclassifies these as IPV4/IPV6 — they round-trip cleanly as a
+    # reclassifies these as IPV4/IPV6 - they round-trip cleanly as a
     # different SCO type, NOT a drop. Must not appear in the dropped list.
     rows = [
         {
@@ -412,7 +412,7 @@ def test_collect_dropped_hostnames_dedupes_within_a_row():
 
 def test_collect_dropped_hostnames_no_edge_in_row_still_records_drop():
     # Single-column projection (e.g. RETURN n only) means no edge cell
-    # exists. The drop still has to be captured — edge_type is "" so the
+    # exists. The drop still has to be captured - edge_type is "" so the
     # Note can show "(unknown edge)" instead of guessing.
     rows = [{"n": {"nodeId": "1", "label": "HOSTNAME", "name": "_spf.example.com"}}]
     dropped = collect_dropped_hostnames(_result(rows, columns=("n",)))
@@ -421,7 +421,7 @@ def test_collect_dropped_hostnames_no_edge_in_row_still_records_drop():
 
 def test_collect_dropped_hostnames_skips_non_hostname_labels():
     # FEED_SOURCE / PREFIX / RIR / etc. nodes with invalid-looking names
-    # are NOT dropped HOSTNAMEs — they're dropped for label-not-mapped
+    # are NOT dropped HOSTNAMEs - they're dropped for label-not-mapped
     # reasons, which is a different problem. Don't conflate.
     rows = [
         {
@@ -465,7 +465,7 @@ def test_parse_country_lowercase_name_uppercases_country_code():
 
 
 def test_parse_city_extracts_country_code_from_comma_suffix():
-    # Whisper CITY format is "<City Name>, <CC>" — split into city + country.
+    # Whisper CITY format is "<City Name>, <CC>" - split into city + country.
     rows = [{"n": {"nodeId": "1", "label": "CITY", "name": "Mountain View, US"}}]
     nodes, _edges = parse_cypher_result(_result(rows, columns=("n",)))
     assert nodes[0]["type"] == "location"

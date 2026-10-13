@@ -25,7 +25,7 @@ _DEFAULT_SCOPE = ["IPv4-Addr", "IPv6-Addr", "Domain-Name", "Autonomous-System"]
 
 
 class _WhisperConnectorConfig(BaseInternalEnrichmentConnectorConfig):
-    """``connector:`` block — defaults specific to this connector."""
+    """``connector:`` block - defaults specific to this connector."""
 
     name: str = Field(default="Whisper", description="Connector display name.")
     scope: ListFromString = Field(
@@ -35,7 +35,7 @@ class _WhisperConnectorConfig(BaseInternalEnrichmentConnectorConfig):
 
 
 class WhisperConfig(BaseConfigModel):
-    """``whisper:`` block — Whisper graph API settings."""
+    """``whisper:`` block - Whisper graph API settings."""
 
     api_url: str = Field(
         description=(

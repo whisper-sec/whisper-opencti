@@ -1,8 +1,8 @@
-# Lint + format toolchain — matches the OpenCTI-Platform/connectors upstream
+# Lint + format toolchain - matches the OpenCTI-Platform/connectors upstream
 # CI (ci-requirements.txt + lint.yml + shared/pylint_plugins/check_stix_plugin/
 # requirements.txt).
 #
-# Test-runtime deps live in tests/test-requirements.txt — split so `make lint`
+# Test-runtime deps live in tests/test-requirements.txt - split so `make lint`
 # doesn't drag pytest + responses into the lint venv.
 #
 # Note on isort: upstream CI uses isort==7.0.0 (in a separate venv from

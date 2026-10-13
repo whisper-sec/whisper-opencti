@@ -1,4 +1,4 @@
-# Scenario 1 — Domain DNS + nameserver pivot
+# Scenario 1 - Domain DNS + nameserver pivot
 
 **Seed**: a `Domain-Name` observable with value `dns.google`.
 
@@ -54,10 +54,10 @@ with `$value = "dns.google"` and `$limit = 50`. (Template:
 | Whisper cell | Translated | Notes |
 | --- | --- | --- |
 | `(HOSTNAME, "dns.google")` | `domain-name` SCO | Seed; will dedupe with the existing OpenCTI observable. |
-| `(HOSTNAME, "8.8.4.4")` | `domain-name` SCO with value `"8.8.4.4"` | **Whisper data quirk** — 8.8.4.4 is labelled `HOSTNAME`, not `IPV4`, so it surfaces as a `domain-name` SCO. STIX accepts the string but conceptually it's an IP. Tracked under known limitations in [docs/qa-handoff.md](../qa-handoff.md). |
+| `(HOSTNAME, "8.8.4.4")` | `domain-name` SCO with value `"8.8.4.4"` | **Whisper data quirk** - 8.8.4.4 is labelled `HOSTNAME`, not `IPV4`, so it surfaces as a `domain-name` SCO. STIX accepts the string but conceptually it's an IP. Tracked under known limitations in [docs/qa-handoff.md](../qa-handoff.md). |
 | `(HOSTNAME, "logopaedie-wachholbinger.at")` etc. | `domain-name` SCO | Domains for which dns.google is the authoritative nameserver. |
 | Edge `RESOLVES_TO` | STIX `resolves-to` | **Direction normalised** in the parser: source must be `domain-name`, target must be `ipv4-addr` / `ipv6-addr`. Here both ends are domain-name (because of the 8.8.4.4 quirk above), so the parser leaves the row order alone. |
-| Edge `NAMESERVER_FOR` | STIX `related-to` | Not in the parser's edge-translation table — falls back to `related-to`. |
+| Edge `NAMESERVER_FOR` | STIX `related-to` | Not in the parser's edge-translation table - falls back to `related-to`. |
 
 ### Resulting STIX bundle (trimmed)
 
@@ -66,6 +66,7 @@ with `$value = "dns.google"` and `$limit = 50`. (Template:
   "type": "bundle",
   "id": "bundle--…",
   "objects": [
+    {"type": "identity", "id": "identity--<whisper-author>", "name": "Whisper", "identity_class": "organization"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-dns.google>", "value": "dns.google"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-8.8.4.4>",  "value": "8.8.4.4"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-pms>",     "value": "pms-zams.at"},
@@ -96,15 +97,15 @@ upserts cleanly instead of creating duplicates.
 The main query above is now only the first of several Cypher calls the
 connector makes for a Domain-Name seed (issue #48 Phases A + B):
 
-- **`LINKS_TO` outbound + inbound** — two directed queries returning up to
+- **`LINKS_TO` outbound + inbound** - two directed queries returning up to
   25 hostnames each that the seed links to / is linked from. Outbound
   edges are tagged `description="LINKS_TO outbound"`, inbound edges have
   source/target swapped and tagged `description="LINKS_TO inbound"`.
-- **`LINKS_TO` count queries** — if either direction has more than 25
+- **`LINKS_TO` count queries** - if either direction has more than 25
   neighbours, a `LINKS_TO neighbour overflow` Note ships attached to the
   seed (e.g. `Whisper found 320 inbound LINKS_TO neighbours; showing
   first 25.`).
-- **Threat-context** — a single OPTIONAL-MATCH query that pulls the
+- **Threat-context** - a single OPTIONAL-MATCH query that pulls the
   seed's `threatScore`, `threatLevel`, 13 boolean flags
   (`isMalware`, `isC2`, …), and every `FEED_SOURCE` the seed is
   `LISTED_IN`. Produces a `Whisper threat intelligence` Note when

@@ -3,7 +3,7 @@
 BASE_FILE := docker-compose.base.yml
 
 # Single env file (.env, gitignored). `.env.example` is the committed
-# template — `cp .env.example .env` is the required first step on a
+# template - `cp .env.example .env` is the required first step on a
 # fresh clone.
 COMPOSE_DEV := docker compose -p whisper-opencti-dev --env-file .env -f $(BASE_FILE) -f docker-compose.dev.yml
 COMPOSE_QA  := docker compose -p whisper-opencti-qa  --env-file .env -f $(BASE_FILE) -f docker-compose.qa.yml
@@ -47,7 +47,7 @@ qa-up: _check-env ## Bring up the QA stack (validates the published GHCR image e
 	@echo "QA stack: connector version = $$(grep '^WHISPER_CONNECTOR_VERSION=' .env | cut -d= -f2)"
 	@echo "OpenCTI will be available at $$(grep OPENCTI_BASE_URL .env | cut -d= -f2)"
 	@echo "Login: $$(grep OPENCTI_ADMIN_EMAIL .env | cut -d= -f2) / $$(grep OPENCTI_ADMIN_PASSWORD .env | cut -d= -f2)"
-	@echo "Note: cannot run alongside dev stack — both bind the same OPENCTI_PORT. Run \`make dev-down\` first if needed."
+	@echo "Note: cannot run alongside dev stack - both bind the same OPENCTI_PORT. Run \`make dev-down\` first if needed."
 
 qa-down: ## Stop the QA stack (preserves volumes)
 	$(COMPOSE_QA) down
@@ -70,9 +70,9 @@ test: ## Run unit tests (assumes `pip install -r tests/test-requirements.txt`)
 
 # Lint + format toolchain matches OpenCTI-Platform/connectors upstream
 # (see shared/pylint_plugins/check_stix_plugin/ for the vendored STIX-ID
-# generator plugin). The pylint check set mirrors upstream's lint.yml —
+# generator plugin). The pylint check set mirrors upstream's lint.yml -
 # `--disable=all --enable=no_generated_id_stix,no-value-for-parameter,unused-import`
-# — not a full style sweep.
+# - not a full style sweep.
 lint: ## Format check (isort + black) + flake8 + narrow pylint (vendored STIX-ID plugin)
 	isort --profile black --line-length 88 --check-only --diff .
 	black --check --diff .

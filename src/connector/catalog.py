@@ -1,6 +1,6 @@
 """Canonical whisper.security catalog procedures used for enrichment.
 
-Rather than only hand-rolled MATCH templates, the connector's authoritative
+Rather than only hand-rolled MATCH templates, the connector's canonical
 enrichment signals come from the whisper.security catalog's canonical graph
 procedures:
 
@@ -16,9 +16,9 @@ Cypher and the docs links below are mirrored from the canonical catalog
 catalog changes.
 
 Values are inlined as Cypher literals (JSON-escaped), the same way
-``queries.py`` does: the Whisper ``/api/query`` endpoint binds request-body
-parameters under the key ``parameters`` (not ``params``), so the connector
-inlines to keep every query on one transport contract.
+``queries.py`` does: the Whisper ``/api/query`` endpoint rejects the
+connector's request-body ``params``, so every query goes out as one
+self-contained Cypher string.
 """
 
 import json

@@ -1,0 +1,31 @@
+#!/bin/bash
+# Pre-push hook: Prevent direct pushes to develop and main branches
+# Install with: git config core.hooksPath .githooks
+
+set -e
+
+remote="$1"
+protected_branches="develop main"
+
+while read local_ref local_sha remote_ref remote_sha; do
+  for branch in $protected_branches; do
+    if [[ "$remote_ref" == "refs/heads/$branch" ]]; then
+      echo ""
+      echo "❌ ERROR: Direct push to branch '$branch' is blocked by pre-push hook"
+      echo ""
+      echo "Workflow:"
+      echo "  1. Create a feature branch: git checkout -b feat/your-feature"
+      echo "  2. Make changes and commit: git add . && git commit -m 'message'"
+      echo "  3. Run local CI checks: make lint && make test && make docker-build"
+      echo "  4. Push feature branch: git push origin feat/your-feature"
+      echo "  5. Open PR via GitHub: gh pr create --base $branch --head feat/your-feature ..."
+      echo ""
+      echo "This prevents accidental commits to protected branches and ensures"
+      echo "all changes are reviewed via pull requests before merging."
+      echo ""
+      exit 1
+    fi
+  done
+done
+
+exit 0

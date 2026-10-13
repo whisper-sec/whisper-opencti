@@ -2,10 +2,10 @@
 # This file defines every service except `connector-whisper`. The connector
 # itself is added by one of the override files:
 #
-#   docker-compose.dev.yml — builds the connector from the local Dockerfile.
-#   docker-compose.qa.yml  — pulls the published image from GHCR.
+#   docker-compose.dev.yml - builds the connector from the local Dockerfile.
+#   docker-compose.qa.yml  - pulls the published image from GHCR.
 #
-# Invoke as a pair via the Makefile (`make dev-up`, `make qa-up`) — both
+# Invoke as a pair via the Makefile (`make dev-up`, `make qa-up`) - both
 # targets pass `-f docker-compose.base.yml -f docker-compose.<flavor>.yml`
 # and use `-p whisper-opencti-<flavor>` to keep containers and volumes
 # isolated between flavours.

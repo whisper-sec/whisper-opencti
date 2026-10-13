@@ -2,7 +2,7 @@
 
 The templates carry two placeholders, ``$value`` and ``$limit``, both
 substituted into the query string client-side at call time. Whisper's Cypher
-engine does **not** support bound parameters for value substitution — values
+engine does **not** support bound parameters for value substitution - values
 must be inlined as Cypher literals, so ``$value`` is JSON-escaped to safely
 produce a double-quoted Cypher string and ``$limit`` is inlined as an integer.
 (The HTTP client still sends an empty ``params: {}`` object in the request
@@ -13,7 +13,7 @@ Whisper anchors searches on the ``name`` property of typed nodes (IPV4, IPV6,
 HOSTNAME, ASN). Main templates use ``-[r]-`` (undirected) and let the result
 parser orient STIX relationships based on label semantics.
 
-`LINKS_TO` is excluded from the main query for every seed type — it has
+`LINKS_TO` is excluded from the main query for every seed type - it has
 massive fan-out (Whisper has 10.8B `LINKS_TO` edges; google.com alone has
 ~12M inbound) and direction matters semantically (outbound vs inbound web
 hyperlinks have very different meanings to an analyst). The connector
@@ -36,7 +36,7 @@ DEFAULT_LIMIT = 50
 LINKS_TO_CAP = 25
 
 # Cap on FEED_SOURCE listings to retrieve for the seed-threat Note. Whisper
-# has 40 FEED_SOURCE nodes total, so 100 is effectively "all of them" —
+# has 40 FEED_SOURCE nodes total, so 100 is effectively "all of them" -
 # this is a safety ceiling, not a sampling limit.
 THREAT_FEED_LIMIT = 100
 
@@ -44,6 +44,12 @@ THREAT_FEED_LIMIT = 100
 # announced from multiple ANNOUNCED_PREFIXes (MOAS/anycast), so >1 is
 # realistic; 10 is generous. Issue #48 Phase C.
 NETWORK_CONTEXT_LIMIT = 10
+
+# Whisper counts depth as the sum of relationship patterns over every
+# MATCH/OPTIONAL MATCH clause; ANONYMOUS plan maxQueryDepth is 2 (CALL
+# whisper.quota()), FREE is 3; every template here must stay <= 2 so the
+# connector works on any plan.
+MAX_QUERY_DEPTH = 2
 
 # Threat-flag boolean fields carried on threat-listed HOSTNAME/IPV4/IPV6
 # nodes. Listed in the order they appear in the Note output. Issue #48
@@ -66,8 +72,8 @@ THREAT_FLAG_FIELDS: tuple[str, ...] = (
 )
 
 # Entity types this connector can enrich. Decoupled from ``QUERIES``
-# because Domain-Name no longer rides the broad one-hop template — it uses
-# the targeted directional builders below (issue #61) — yet is still very
+# because Domain-Name no longer rides the broad one-hop template - it uses
+# the targeted directional builders below (issue #61) - yet is still very
 # much in scope. IP/ASN seeds keep the broad undirected query.
 SUPPORTED_ENTITY_TYPES: frozenset[str] = frozenset(
     {"IPv4-Addr", "IPv6-Addr", "Domain-Name", "Autonomous-System"}
@@ -142,7 +148,7 @@ def get_query_for_entity_type(
 # node (HOSTNAME / IPV4 / IPV6), then OPTIONAL MATCHes its LISTED_IN edges
 # to FEED_SOURCE nodes. Returns one row per feed listing (or a single row
 # with null feed fields when the seed has threat properties but isn't
-# listed anywhere) — caller is responsible for collapsing into a single
+# listed anywhere) - caller is responsible for collapsing into a single
 # Note. ASN nodes don't carry these properties in Whisper's schema, so
 # Autonomous-System seeds are intentionally omitted.
 #
@@ -184,7 +190,7 @@ def get_threat_context_query(
     """Return the supplementary threat-context Cypher for the seed, or
     ``None`` if the entity type doesn't carry threat properties in Whisper.
 
-    Only HOSTNAME/IPV4/IPV6 are supported — ASN nodes don't have
+    Only HOSTNAME/IPV4/IPV6 are supported - ASN nodes don't have
     threatScore/threatLevel/flags in Whisper's schema.
     """
     template = THREAT_CONTEXT_QUERIES.get(entity_type)
@@ -200,49 +206,58 @@ def get_threat_context_query(
     )
 
 
-# IP → ASN/prefix supplementary query. Anchors on the seed IPv4/IPv6 node,
-# walks ANNOUNCED_BY→ANNOUNCED_PREFIX→ROUTES→ASN to derive the announcing
-# AS (intentional 2-hop chain — IPs don't connect directly to ASNs in
-# Whisper's schema), then OPTIONAL-MATCHes the ASN's HAS_NAME human label
-# and the IP's static-allocation PREFIX. Returns ``ip`` and ``asn`` as full
-# node cells so the caller can lift Whisper nodeIds for edge wiring;
-# everything else comes back as flat columns the caller folds into a Note.
+# Network context is split across three supplementary queries to keep every
+# template within Whisper's ANONYMOUS depth budget of 2. The IP→announced
+# prefix→ASN query uses the full two-hop budget; batched ASN-name lookup and
+# IP→static-prefix lookup are separate one-hop queries. The network-context
+# query returns ``ip`` and ``asn`` as full node cells so the caller can lift
+# Whisper nodeIds for edge wiring; announced-prefix properties are flat
+# columns the caller folds into a Note.
 #
-# Skipped for Domain-Name and Autonomous-System seeds — for Domain-Name
+# Skipped for Domain-Name and Autonomous-System seeds - for Domain-Name
 # the network context lives on the resolved IPs (analyst can pivot), and
 # Autonomous-System seeds already ARE the ASN.
 NETWORK_CONTEXT_QUERIES: dict[str, str] = {
     "IPv4-Addr": (
         "MATCH (ip:IPV4 {name: $value})-[:ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)"
         "-[:ROUTES]->(asn:ASN) "
-        "OPTIONAL MATCH (asn)-[:HAS_NAME]->(asn_name:ASN_NAME) "
-        "OPTIONAL MATCH (ip)-[:BELONGS_TO]->(p:PREFIX) "
         "RETURN ip AS seed, asn AS asn, "
-        "asn_name.name AS asnDescription, "
         "ap.name AS announcedPrefix, "
         "ap.threatScore AS apThreatScore, "
         "ap.threatLevel AS apThreatLevel, "
         "ap.isAnycast AS isAnycast, "
         "ap.isMoas AS isMoas, "
-        "ap.isWithdrawn AS isWithdrawn, "
-        "p.name AS prefix "
+        "ap.isWithdrawn AS isWithdrawn "
         "LIMIT $limit"
     ),
     "IPv6-Addr": (
         "MATCH (ip:IPV6 {name: $value})-[:ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)"
         "-[:ROUTES]->(asn:ASN) "
-        "OPTIONAL MATCH (asn)-[:HAS_NAME]->(asn_name:ASN_NAME) "
-        "OPTIONAL MATCH (ip)-[:BELONGS_TO]->(p:PREFIX) "
         "RETURN ip AS seed, asn AS asn, "
-        "asn_name.name AS asnDescription, "
         "ap.name AS announcedPrefix, "
         "ap.threatScore AS apThreatScore, "
         "ap.threatLevel AS apThreatLevel, "
         "ap.isAnycast AS isAnycast, "
         "ap.isMoas AS isMoas, "
-        "ap.isWithdrawn AS isWithdrawn, "
-        "p.name AS prefix "
+        "ap.isWithdrawn AS isWithdrawn "
         "LIMIT $limit"
+    ),
+}
+
+ASN_NAME_QUERY: str = (
+    "UNWIND [$asn_names] AS a "
+    "MATCH (asn:ASN {name: a})-[:HAS_NAME]->(asn_name:ASN_NAME) "
+    "RETURN a AS asn, asn_name.name AS asnDescription LIMIT $limit"
+)
+
+STATIC_PREFIX_QUERIES: dict[str, str] = {
+    "IPv4-Addr": (
+        "MATCH (ip:IPV4 {name: $value})-[:BELONGS_TO]->(p:PREFIX) "
+        "RETURN p.name AS prefix LIMIT $limit"
+    ),
+    "IPv6-Addr": (
+        "MATCH (ip:IPV6 {name: $value})-[:BELONGS_TO]->(p:PREFIX) "
+        "RETURN p.name AS prefix LIMIT $limit"
     ),
 }
 
@@ -252,10 +267,46 @@ def get_network_context_query(
     value: str,
     limit: int = NETWORK_CONTEXT_LIMIT,
 ) -> str | None:
-    """Return the IP→ASN/prefix supplementary Cypher, or ``None`` if the
+    """Return the IP→ASN supplementary Cypher, or ``None`` if the
     entity type doesn't carry one (Domain-Name and Autonomous-System).
     """
     template = NETWORK_CONTEXT_QUERIES.get(entity_type)
+    if template is None:
+        return None
+    if not value:
+        raise ValueError("value is required")
+    limit_int = int(limit)
+    if limit_int < 1:
+        raise ValueError(f"limit must be >= 1, got {limit_int}")
+    return template.replace("$value", json.dumps(str(value))).replace(
+        "$limit", str(limit_int)
+    )
+
+
+def get_asn_name_query(
+    asn_names: list[str],
+    limit: int = NETWORK_CONTEXT_LIMIT,
+) -> str | None:
+    """Return a batched ASN human-name lookup, or ``None`` if empty."""
+    names = [name for name in asn_names if name]
+    if not names:
+        return None
+    limit_int = int(limit)
+    if limit_int < 1:
+        raise ValueError(f"limit must be >= 1, got {limit_int}")
+    inlined = ", ".join(json.dumps(name) for name in names)
+    return ASN_NAME_QUERY.replace("$asn_names", inlined).replace(
+        "$limit", str(limit_int)
+    )
+
+
+def get_static_prefix_query(
+    entity_type: str,
+    value: str,
+    limit: int = NETWORK_CONTEXT_LIMIT,
+) -> str | None:
+    """Return the IP→static-prefix lookup, or ``None`` if unsupported."""
+    template = STATIC_PREFIX_QUERIES.get(entity_type)
     if template is None:
         return None
     if not value:
@@ -277,7 +328,7 @@ def get_links_to_queries(
     for an entity type, or ``None`` if `LINKS_TO` enrichment doesn't apply
     to that type.
 
-    Only Domain-Name seeds get this — `LINKS_TO` is a HOSTNAME→HOSTNAME edge
+    Only Domain-Name seeds get this - `LINKS_TO` is a HOSTNAME→HOSTNAME edge
     in Whisper's schema.
     """
     templates = LINKS_TO_QUERIES.get(entity_type)
@@ -311,7 +362,7 @@ def get_links_to_queries(
 # (CDNs) and multi-NS setups can run to dozens; 50 is generous headroom.
 DOMAIN_FACT_LIMIT = 50
 
-# Cap for "capped pivot" categories — related infrastructure reachable from
+# Cap for "capped pivot" categories - related infrastructure reachable from
 # the seed (domains the seed is NS/MX for, subdomains, inbound CNAMEs). These
 # can be enormous (a popular MX serves millions of domains), so they are
 # capped and the connector attaches an overflow Note when the true count
@@ -497,7 +548,7 @@ def get_whois_phone_query(value: str, limit: int = WHOIS_PHONE_LIMIT) -> str:
 # Whisper has no LOOKALIKE_OF edge, so the connector generates typosquat
 # candidates in-process and confirms which exist as HOSTNAME nodes with one
 # existence query. This is a bounded subset of the algorithms the Whisper
-# ``domain_variants`` endpoint runs (which the connector can't call — it only
+# ``domain_variants`` endpoint runs (which the connector can't call - it only
 # speaks Cypher to ``/api/query``).
 
 _HOMOGLYPHS: dict[str, str] = {
@@ -544,7 +595,7 @@ def generate_domain_variants(
 
     Returns up to ``cap`` ``{"variant", "method", "confidence"}`` dicts,
     deduplicated and excluding the input itself. Mutations are applied to the
-    label before the final dot (a naive SLD split — good enough; the existence
+    label before the final dot (a naive SLD split - good enough; the existence
     check filters to registered candidates regardless). The empty list is
     returned for inputs without a dot.
     """

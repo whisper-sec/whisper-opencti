@@ -2,7 +2,7 @@
 # building. Use this to validate a tagged release end-to-end before
 # handing the image off to QA.
 #
-# Compose this with docker-compose.base.yml — the Makefile's qa-* targets
+# Compose this with docker-compose.base.yml - the Makefile's qa-* targets
 # pass both files.
 #
 # The version pulled is controlled by WHISPER_CONNECTOR_VERSION in .env

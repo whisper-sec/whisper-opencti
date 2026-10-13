@@ -9,6 +9,7 @@ from src.connector.converter_to_stix import build_bundle, build_note
 from src.connector.exceptions import (
     StixMappingError,
     WhisperClientError,
+    WhisperQueryError,
     WhisperTlpError,
 )
 from src.connector.queries import (
@@ -17,12 +18,14 @@ from src.connector.queries import (
     LINKS_TO_CAP,
     THREAT_FLAG_FIELDS,
     generate_domain_variants,
+    get_asn_name_query,
     get_domain_direct_fact_queries,
     get_domain_pivot_queries,
     get_links_to_queries,
     get_network_context_query,
     get_query_for_entity_type,
     get_spf_policy_query,
+    get_static_prefix_query,
     get_threat_context_query,
     get_variant_existence_query,
     get_whois_phone_query,
@@ -115,7 +118,7 @@ class WhisperConnector:
                     return stix2.AutonomousSystem(number=int(number)).id
         except (
             Exception
-        ):  # noqa: BLE001 — defensive; never fail the enrichment over this
+        ):  # noqa: BLE001 - defensive; never fail the enrichment over this
             return None
         return None
 
@@ -155,7 +158,7 @@ class WhisperConnector:
 
         Used in two cases under v7 ``playbook_compatible=True``:
         1. Out-of-scope entity arriving via a playbook chain (no
-           ``event_type``) — downstream playbook nodes would lose data
+           ``event_type``) - downstream playbook nodes would lose data
            if we returned an empty bundle.
         2. Defensive default for any unanticipated playbook routing.
         """
@@ -168,7 +171,7 @@ class WhisperConnector:
     def _process_message(self, data: dict) -> str:
         """v7 internal-enrichment callback.
 
-        The data dict carries everything we need — pycti 7.x hands us
+        The data dict carries everything we need - pycti 7.x hands us
         the enrichment entity, its STIX form, and the bundle's stix
         objects directly, removing the need for a separate
         ``helper.api.stix_cyber_observable.read()`` round-trip.
@@ -181,7 +184,9 @@ class WhisperConnector:
         3. Delegate to ``_enrich_observable`` for the real enrichment.
         """
         observable = data.get("enrichment_entity") or {}
-        stix_objects = data.get("stix_objects") or []
+        # Bracket access required by the upstream Verified linter (VC322/VC319);
+        # `or []` preserves the missing-key/None semantics of .get().
+        stix_objects = (data["stix_objects"] if "stix_objects" in data else None) or []
         if not observable:
             return "missing enrichment_entity in v7 callback payload"
 
@@ -189,7 +194,7 @@ class WhisperConnector:
             self._extract_and_check_markings(observable)
         except WhisperTlpError as exc:
             self.helper.connector_logger.warning(
-                "Refusing to enrich — TLP exceeds whisper.max_tlp",
+                "Refusing to enrich - TLP exceeds whisper.max_tlp",
                 {"entity_id": observable.get("id"), "error": str(exc)},
             )
             return str(exc)
@@ -287,7 +292,7 @@ class WhisperConnector:
     def _epoch_ms_to_iso(value: object) -> str | None:
         """Format a Whisper millisecond-epoch timestamp as ISO 8601 UTC.
 
-        Returns ``None`` if the value isn't a positive integer/float — keeps
+        Returns ``None`` if the value isn't a positive integer/float - keeps
         the formatter robust against the LISTED_IN edges that carry null
         firstSeen/lastSeen for some feeds.
         """
@@ -376,13 +381,43 @@ class WhisperConnector:
         return "\n".join(lines)
 
     @staticmethod
+    def _note_text(value: object, limit: int = 2000) -> str:
+        """Fold a graph-returned value onto one line, capped at ``limit``.
+
+        Returned strings are third-party text. Collapsing whitespace stops a
+        value from faking the Note's own line structure; the cap stops one
+        oversized field from bloating the Note.
+        """
+        text = " ".join(str(value).split())
+        if len(text) > limit:
+            return text[:limit].rstrip() + " [truncated]"
+        return text
+
+    @classmethod
+    def _note_list(cls, values: object, cap: int = 25) -> str:
+        """Render a returned list as one capped, comma-joined segment."""
+        if not isinstance(values, list):
+            return cls._note_text(values, 200)
+        shown = [cls._note_text(item, 200) for item in values[:cap]]
+        if len(values) > cap:
+            shown.append(f"+{len(values) - cap} more")
+        return ", ".join(shown)
+
+    @classmethod
     def _format_canonical_content(
-        entity_value: str, results: dict[str, list[dict]]
+        cls,
+        entity_value: str,
+        results: dict[str, list[dict]],
+        procedures: list[str],
+        caveat: str | None = None,
     ) -> str:
         """Render the canonical-catalog enrichment Note from procedure rows.
 
         ``results`` maps a procedure name (``whisper.identify`` /
-        ``whisper.assess`` / ``whisper.explain``) to the rows it returned. Only
+        ``whisper.assess`` / ``whisper.explain``) to the rows it returned.
+        ``procedures`` lists every procedure that was requested: the footer
+        is built from it, so a transient failure of one procedure does not
+        change the content and with it the Note's deterministic id. Only
         procedures that carry a meaningful signal produce a line, so a seed
         Whisper knows nothing about yields an empty string (and no Note).
         """
@@ -395,11 +430,11 @@ class WhisperConnector:
             if name:
                 category = row.get("category")
                 roles = row.get("roles")
-                label = str(name)
+                label = cls._note_text(name, 200)
                 if category:
-                    label += f" ({category})"
+                    label += f" ({cls._note_text(category, 100)})"
                 if isinstance(roles, list) and roles:
-                    label += " - roles: " + ", ".join(str(r) for r in roles)
+                    label += " - roles: " + cls._note_list(roles)
                 lines.append(f"Vendor / operator (whisper.identify): {label}")
 
         assess_rows = results.get("whisper.assess") or []
@@ -409,42 +444,47 @@ class WhisperConnector:
             band = row.get("band")
             known = (label and label != "unknown") or (band and band != "UNKNOWN")
             if known:
-                parts = [f"label={label}"]
+                parts: list[str] = []
+                if label:
+                    parts.append(f"label={cls._note_text(label, 100)}")
                 if band:
-                    parts.append(f"band={band}")
+                    parts.append(f"band={cls._note_text(band, 100)}")
                 coverage = row.get("coverage")
                 if coverage:
-                    parts.append(f"coverage={coverage}")
+                    parts.append(f"coverage={cls._note_text(coverage, 100)}")
                 lines.append("Threat posture (whisper.assess): " + ", ".join(parts))
                 evidence = row.get("evidence")
                 if isinstance(evidence, list) and evidence:
-                    lines.append("  evidence: " + ", ".join(str(e) for e in evidence))
+                    lines.append("  evidence: " + cls._note_list(evidence))
 
         explain_rows = results.get("whisper.explain") or []
         if explain_rows:
             row = explain_rows[0]
             level = row.get("level")
-            if level is not None:
+            # "NONE" is what whisper.explain returns for an unlisted seed; like
+            # the threat-context Note, that is not a signal worth a line.
+            if level and str(level).upper() != "NONE":
                 score = row.get("score")
-                summary = f"level={level}"
+                summary = f"level={cls._note_text(level, 100)}"
                 if isinstance(score, (int, float)):
                     summary += f", score={score:g}"
                 lines.append(f"Threat scoring (whisper.explain): {summary}")
                 explanation = row.get("explanation")
                 if isinstance(explanation, str) and explanation.strip():
-                    lines.append(f"  {explanation.strip()}")
+                    lines.append(f"  {cls._note_text(explanation)}")
 
         if not lines:
             return ""
 
         header = f"Whisper graph catalog assessment for {entity_value}:"
-        procedures = sorted(results.keys())
         footer = [
             "",
-            "Canonical procedures: " + ", ".join(procedures),
+            "Canonical procedures: " + ", ".join(sorted(procedures)),
             "Recipes: "
             + " | ".join(f"{r.slug} ({r.docs_url})" for r in CATALOG_RECIPES),
         ]
+        if caveat:
+            footer.extend(["", caveat])
         return "\n".join([header, "", *lines, *footer])
 
     def _collect_canonical_enrichment(
@@ -456,36 +496,62 @@ class WhisperConnector:
         """Run the canonical whisper.security catalog procedures for the seed.
 
         Runs ``whisper.identify`` / ``whisper.assess`` / ``whisper.explain``
-        (whichever apply to ``entity_type``) and folds their authoritative
-        signals into a single Note attached to the seed. These are the same
-        procedures the catalog's ``indicator-enrichment`` and
-        ``infrastructure-mapping`` recipes are built on, so enrichment tracks
-        the catalog rather than a bespoke query set.
+        (whichever apply to ``entity_type``) and folds their signals into a
+        single Note attached to the seed. These are the same procedures the
+        catalog's ``indicator-enrichment`` and ``infrastructure-mapping``
+        recipes are built on, so enrichment tracks the catalog rather than a
+        bespoke query set.
 
-        Each procedure is best-effort and independently guarded: one failing
-        (or a type it does not apply to) never sinks the others or the main
-        bundle.
+        Best-effort end to end, and nothing here raises into the caller: a
+        ``WhisperQueryError`` skips just that procedure; an auth or transport
+        error (key rejected, rate limit or outage after the client's own
+        retries) stops the remaining procedures for this seed, since they
+        would fail the same way, and the Note is built from what already
+        answered; a malformed response drops only this Note. The main bundle
+        and the other Notes ship either way.
         """
         queries = get_canonical_enrichment_queries(entity_type, entity_value)
         if not queries:
             return []
 
+        log_context = {"entity_id": observable.get("id"), "value": entity_value}
         results: dict[str, list[dict]] = {}
         for name, query in queries.items():
             try:
                 result = self.client.execute_cypher(query)
-            except WhisperClientError as exc:
+            except WhisperQueryError as exc:
                 self.helper.connector_logger.error(
                     "Whisper canonical procedure failed (continuing)",
-                    {"procedure": name, "value": entity_value, "error": str(exc)},
+                    {**log_context, "procedure": name, "error": str(exc)},
                 )
                 continue
-            results[name] = result.rows
+            except WhisperClientError as exc:
+                self.helper.connector_logger.error(
+                    "Whisper canonical procedure failed (skipping the rest)",
+                    {**log_context, "procedure": name, "error": str(exc)},
+                )
+                break
+            results[name] = [row for row in result.rows if isinstance(row, dict)]
 
         if not results:
             return []
 
-        content = self._format_canonical_content(entity_value, results)
+        caveat = None
+        if entity_type == "Domain-Name":
+            caveat = (
+                "Note: the Whisper threat score is supporting evidence, "
+                "not an authoritative verdict - corroborate before acting."
+            )
+        try:
+            content = self._format_canonical_content(
+                entity_value, results, list(queries), caveat=caveat
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            self.helper.connector_logger.error(
+                "Whisper canonical result could not be rendered (continuing)",
+                {**log_context, "error": str(exc)},
+            )
+            return []
         if not content:
             return []
 
@@ -594,7 +660,7 @@ class WhisperConnector:
             _append_prefix_block(lines, a, indent="")
         elif announcers:
             lines.append(
-                f"Announced by {len(announcers)} ASN(s) — multi-origin (MOAS):"
+                f"Announced by {len(announcers)} ASN(s) - multi-origin (MOAS):"
             )
             for a in announcers:
                 label = f"AS{a['asn_number']}"
@@ -621,13 +687,16 @@ class WhisperConnector:
     ) -> tuple[list[dict], list[dict], list[stix2.Note]]:
         """For IPv4/IPv6 seeds, derive announcing-ASN context.
 
-        Returns (extra_nodes, extra_edges, notes). The Autonomous-System SCO
-        is synthesized from the ASN node returned by the supplementary
-        query (Whisper nodeId preserved for idempotent dedup), and an
-        IP→AS `related-to` edge with ``description="ANNOUNCED_BY"`` ties
-        them together. Prefix-level details (announced prefix, BGP flags,
-        ANNOUNCED_PREFIX threat score) collapse into a single Note attached
-        to the seed — there's no clean STIX SCO for a CIDR network.
+        Uses three depth-bounded round trips (depth 2 + 1 + 1) so ASN names
+        and static prefixes do not deepen or cross-join the announcing-ASN
+        chain. Returns (extra_nodes, extra_edges, notes). The
+        Autonomous-System SCO is synthesized from the ASN node returned by
+        the supplementary query (Whisper nodeId preserved for idempotent
+        dedup), and an IP→AS `related-to` edge with
+        ``description="ANNOUNCED_BY"`` ties them together. Prefix-level
+        details (announced prefix, BGP flags, ANNOUNCED_PREFIX threat score)
+        collapse into a single Note attached to the seed - there's no clean
+        STIX SCO for a CIDR network.
 
         Best-effort: caller wraps in try/except so a transport failure
         here can't kill the main bundle or the other supplementary Notes.
@@ -642,7 +711,7 @@ class WhisperConnector:
 
         seed_stix_id = self._seed_stix_id(entity_type, entity_value, observable)
         # Aggregate by ASN Whisper nodeId so MOAS rows for the same ASN
-        # collapse into a single announcer entry — keeps the Note clean
+        # collapse into a single announcer entry - keeps the Note clean
         # when Whisper has multiple ANNOUNCED_PREFIXes that share an AS.
         announcers_by_id: dict[str, dict] = {}
         static_prefixes: set[str] = set()
@@ -667,13 +736,13 @@ class WhisperConnector:
             if not match:
                 continue
             asn_number = int(match.group(1))
-            announcer = announcers_by_id.setdefault(
+            announcers_by_id.setdefault(
                 asn_id,
                 {
                     "asn_id": asn_id,
                     "asn_name": asn_name_str,
                     "asn_number": asn_number,
-                    "description": row.get("asnDescription"),
+                    "description": None,
                     "prefix": row.get("announcedPrefix"),
                     "score": row.get("apThreatScore"),
                     "level": row.get("apThreatLevel"),
@@ -682,16 +751,37 @@ class WhisperConnector:
                     "withdrawn": row.get("isWithdrawn"),
                 },
             )
-            if not announcer.get("description") and row.get("asnDescription"):
-                announcer["description"] = row.get("asnDescription")
-            if row.get("prefix"):
-                static_prefixes.add(row.get("prefix"))
 
         if not announcers_by_id:
             return [], [], []
 
+        asn_names = sorted(
+            {announcer["asn_name"] for announcer in announcers_by_id.values()}
+        )
+        asn_name_query = get_asn_name_query(asn_names)
+        if asn_name_query is not None:
+            asn_name_result = self.client.execute_cypher(asn_name_query)
+            for name_record in asn_name_result.rows:
+                asn_name = name_record.get("asn")
+                description = name_record.get("asnDescription")
+                if not description:
+                    continue
+                for announcer in announcers_by_id.values():
+                    if announcer["asn_name"] == asn_name and not announcer.get(
+                        "description"
+                    ):
+                        announcer["description"] = description
+
+        static_prefix_query = get_static_prefix_query(entity_type, entity_value)
+        if static_prefix_query is not None:
+            static_prefix_result = self.client.execute_cypher(static_prefix_query)
+            for prefix_record in static_prefix_result.rows:
+                prefix = prefix_record.get("prefix")
+                if prefix:
+                    static_prefixes.add(prefix)
+
         # Synthesize the seed IP node so any edge we emit has a matching
-        # entry in `nodes` — covers the case where the main query returned
+        # entry in `nodes` - covers the case where the main query returned
         # no rows for this IP (e.g. an IP with only ANNOUNCED_PREFIX/PREFIX
         # neighbours, all of which the parser drops).
         extra_nodes: list[dict] = []
@@ -806,7 +896,7 @@ class WhisperConnector:
         """Generate typosquat candidates, confirm which exist in Whisper, and
         emit a ``Whisper domain variants`` Note (issue #61 AC #15).
 
-        Existence in the graph means registered/observed, NOT malicious — the
+        Existence in the graph means registered/observed, NOT malicious - the
         Note says so. Best-effort: a query failure yields no Note.
         """
         if not seed_stix_id:
@@ -837,7 +927,7 @@ class WhisperConnector:
             return []
         lines = [
             "Whisper found the following registered lookalike domains "
-            "(existence only — registration is not a malice verdict; pivot "
+            "(existence only - registration is not a malice verdict; pivot "
             "each through threat intel before acting):",
             "",
         ]
@@ -863,7 +953,7 @@ class WhisperConnector:
         """Run the targeted directional category queries for a Domain-Name seed.
 
         Returns ``(nodes, edges, notes, total_execution_ms)``. Each category is
-        independently best-effort — one failing query logs and is skipped
+        independently best-effort - one failing query logs and is skipped
         rather than sinking the whole enrichment.
         """
         nodes_by_id: dict[str, dict] = {}
@@ -881,7 +971,7 @@ class WhisperConnector:
         def add_edge(
             source_id: str, target_id: str, rel_type: str, description: str
         ) -> None:
-            # The converter keys relationships off (source, target, type) —
+            # The converter keys relationships off (source, target, type) -
             # description is intentionally excluded so re-enrichment is
             # idempotent. That means two categories pointing a `related-to`
             # edge at the SAME node (e.g. a registrar that is both the current
@@ -890,7 +980,7 @@ class WhisperConnector:
             # first-writer-wins: categories are processed in precedence order
             # (direct facts before pivots; within direct facts `registrar`
             # before `previous-registrar`), so the more specific/current
-            # description is kept. This ordering is load-bearing — see
+            # description is kept. This ordering is load-bearing - see
             # DOMAIN_DIRECT_FACT_QUERIES.
             key = (source_id, target_id, rel_type)
             if key in seen_edge_keys:
@@ -1040,7 +1130,7 @@ class WhisperConnector:
                     abstract="Whisper threat feed evidence",
                     caveat=(
                         "Note: the Whisper threat score is supporting evidence, "
-                        "not an authoritative verdict — corroborate before acting."
+                        "not an authoritative verdict - corroborate before acting."
                     ),
                 )
             )
@@ -1076,18 +1166,10 @@ class WhisperConnector:
         )
 
         # Canonical whisper.security catalog assessment (identify / assess /
-        # explain). Best-effort: a failure here must not sink the main bundle.
-        try:
-            notes.extend(
-                self._collect_canonical_enrichment(
-                    "Domain-Name", entity_value, observable
-                )
-            )
-        except WhisperClientError as exc:
-            self.helper.connector_logger.error(
-                "Whisper canonical enrichment failed (continuing)",
-                {"value": entity_value, "error": str(exc)},
-            )
+        # explain). Guarded inside: nothing in it can sink the main bundle.
+        notes.extend(
+            self._collect_canonical_enrichment("Domain-Name", entity_value, observable)
+        )
 
         return self._ship_enrichment(
             observable, entity_value, nodes, edges, notes, total_ms
@@ -1110,7 +1192,7 @@ class WhisperConnector:
             return f"observable {observable.get('id')!r} has no value to enrich"
 
         # Domain-Name uses targeted directional category queries rather than
-        # the broad one-hop template (issue #61) — deterministic output, stable
+        # the broad one-hop template (issue #61) - deterministic output, stable
         # relationship descriptions. IP/ASN seeds keep the broad path below.
         if entity_type == "Domain-Name":
             return self._enrich_domain(observable, entity_value)
@@ -1153,7 +1235,7 @@ class WhisperConnector:
                 entity_type, entity_value, observable
             )
         except WhisperClientError as exc:
-            # LINKS_TO is a nice-to-have — don't fail the whole enrichment
+            # LINKS_TO is a nice-to-have - don't fail the whole enrichment
             # if just the supplementary queries fall over.
             self.helper.connector_logger.error(
                 "Whisper LINKS_TO supplementary query failed (continuing)",
@@ -1190,7 +1272,7 @@ class WhisperConnector:
                     )
                 )
 
-        # Supplementary network context for IPv4/IPv6 seeds — emits the
+        # Supplementary network context for IPv4/IPv6 seeds - emits the
         # announcing-ASN as a real Autonomous-System SCO + related-to edge
         # plus a Note for the prefix/BGP/ANNOUNCED_PREFIX threat detail.
         # Same best-effort posture as the other supplementary passes.
@@ -1209,19 +1291,11 @@ class WhisperConnector:
         extra_notes.extend(net_notes)
 
         # Canonical whisper.security catalog assessment (assess / explain for
-        # ASN seeds; identify / assess / explain for IPs). Best-effort: a
-        # failure here must not block the main bundle or the other Notes.
-        try:
-            extra_notes.extend(
-                self._collect_canonical_enrichment(
-                    entity_type, entity_value, observable
-                )
-            )
-        except WhisperClientError as exc:
-            self.helper.connector_logger.error(
-                "Whisper canonical enrichment failed (continuing)",
-                {"entity_id": observable.get("id"), "error": str(exc)},
-            )
+        # ASN seeds; identify / assess / explain for IPs). Guarded inside:
+        # nothing in it can block the main bundle or the other Notes.
+        extra_notes.extend(
+            self._collect_canonical_enrichment(entity_type, entity_value, observable)
+        )
 
         if extra_nodes or extra_edges:
             seen_node_ids = {n["id"] for n in nodes}
@@ -1262,7 +1336,7 @@ class WhisperConnector:
         # PREFIX, CITY, COUNTRY) we end up with just the seed and no edges.
         # Sending a bundle that only re-asserts the seed observable adds no
         # new information to OpenCTI and produces a misleading "Enriched"
-        # status — UNLESS we also have supplementary Notes (LINKS_TO overflow
+        # status - UNLESS we also have supplementary Notes (LINKS_TO overflow
         # or Whisper threat intelligence) to attach, in which case the
         # bundle carries genuinely new analyst-visible context.
         if not edges and not extra_notes:

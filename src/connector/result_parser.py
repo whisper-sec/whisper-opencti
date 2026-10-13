@@ -3,19 +3,19 @@
 Whisper row cell shapes (per the live API, captured in PR #11):
 
 - Node cell: ``{"nodeId": "...", "label": "<UPPERCASE>", "name": "...", ...}``
-- Edge cell: ``{"type": "<UPPERCASE>", ...}``  (no source/target — inferred
+- Edge cell: ``{"type": "<UPPERCASE>", ...}``  (no source/target - inferred
   from neighbouring node columns)
 
 Output shape (consumed by ``converter_to_stix.build_bundle``):
 
-- ``nodes`` — list of ``{"id", "type", "properties"}``
-- ``edges`` — list of ``{"source_id", "target_id", "type", "properties"}``
+- ``nodes`` - list of ``{"id", "type", "properties"}``
+- ``edges`` - list of ``{"source_id", "target_id", "type", "properties"}``
 
 Whisper labels currently mapped to STIX types (see ``_LABEL_TO_STIX_TYPE``):
 HOSTNAME, IPV4, IPV6, ASN, EMAIL, COUNTRY/CITY (→ Location SDO),
 ORGANIZATION/REGISTRAR (→ Identity SDO). Other labels (FEED_SOURCE, PREFIX,
 REGISTERED_PREFIX, ANNOUNCED_PREFIX, RIR, TLD, PHONE, etc.) are silently
-dropped — no clean STIX equivalent exists yet. Edges that touch a dropped
+dropped - no clean STIX equivalent exists yet. Edges that touch a dropped
 node are also dropped.
 """
 
@@ -44,20 +44,20 @@ _LABEL_TO_STIX_TYPE: dict[str, str] = {
 
 # Whisper edge type → STIX relationship type. Anything not listed here
 # falls back to "related-to" with the original Whisper edge type carried in
-# the relationship's `description` field — see _build_edge below.
+# the relationship's `description` field - see _build_edge below.
 #
 # OpenCTI enforces the STIX 2.1 fixed SRO vocabulary at ingestion (custom
 # relationship_type strings like "nameserver-for" are rejected with
 # FUNCTIONAL_ERROR). Issue #31 explored emitting custom types directly;
 # that path requires platform-side custom-relationship-type registration
 # (deferred to v0.4). For now we preserve Whisper edge semantics in the
-# description field — visible to analysts, queryable as text, lossless.
+# description field - visible to analysts, queryable as text, lossless.
 _EDGE_TO_STIX_REL: dict[str, str] = {
     "RESOLVES_TO": "resolves-to",
 }
 
 # STIX relationships where direction matters. Maps the STIX rel type to the
-# expected source STIX type — if the row gives us the endpoints in the
+# expected source STIX type - if the row gives us the endpoints in the
 # wrong order, we flip before emitting.
 _EDGE_DIRECTION_SOURCE: dict[str, set[str]] = {
     "resolves-to": {"domain-name"},
@@ -76,7 +76,7 @@ def _is_valid_domain_name(value: str) -> bool:
     DNS labels for specific record types (TXT/SPF/DKIM/DMARC use
     underscored labels like `_spf.example.com`) but are NOT valid
     general-purpose domain names per RFC 1035. We filter those at parse
-    time so the bundle doesn't ship objects OpenCTI will reject — keeps
+    time so the bundle doesn't ship objects OpenCTI will reject - keeps
     the work-item status honest and avoids orphan relationships.
     """
     if not value or len(value) > 253 or value.endswith("."):
@@ -107,7 +107,7 @@ def collect_dropped_hostnames(result: CypherResult) -> list[dict]:
     caller is responsible for cross-row dedup.
 
     IP-shaped HOSTNAME values (Whisper data quirk; reclassified to IPV4 /
-    IPV6 by the translator) are NOT counted as drops — they round-trip
+    IPV6 by the translator) are NOT counted as drops - they round-trip
     fine, just on a different SCO type.
     """
     dropped: list[dict] = []
@@ -201,7 +201,7 @@ def translate_node_cell(cell: dict) -> dict | None:
     The targeted Domain-Name enrichment path (issue #61) builds STIX
     relationships explicitly rather than inferring them from row column
     order, but still needs the same node normalization the main parser
-    applies — IP-shaped HOSTNAME reclassification, RFC 1035 filtering,
+    applies - IP-shaped HOSTNAME reclassification, RFC 1035 filtering,
     REGISTRAR/ORGANIZATION → Identity cleanup, ASN parsing. Returns the
     normalized ``{"id", "type", "properties"}`` dict, or ``None`` if the
     cell isn't a usable/mappable node.
@@ -223,14 +223,19 @@ def _translate_node(cell: dict) -> dict | None:
             ip = ipaddress.ip_address(name)
             label = "IPV6" if isinstance(ip, ipaddress.IPv6Address) else "IPV4"
         except ValueError:
-            # Not an IP — validate as RFC 1035 domain name before letting
+            # Not an IP - validate as RFC 1035 domain name before letting
             # this become a STIX domain-name SCO. Whisper returns some DNS
             # records (SPF/DKIM/DMARC subdomains containing underscores
             # like `_spf_telus_com.nssi.telus.com`) that OpenCTI rejects
             # at ingestion. Drop them here so the bundle stays consistent
             # with what OpenCTI will accept (issue #47).
             if not _is_valid_domain_name(name):
-                logger.debug("dropping HOSTNAME with non-RFC-1035 value: %r", name)
+                # warning (not debug/info) so operators get a visible record
+                # of silently dropped data - the upstream Verified linter
+                # (VC307) flags except blocks whose only log call is
+                # debug/info; warning is the lowest level that conforms.
+                # Volume is bounded by the query LIMITs.
+                logger.warning("dropping HOSTNAME with non-RFC-1035 value: %r", name)
                 return None
 
     stix_type = _LABEL_TO_STIX_TYPE.get(label)
@@ -278,7 +283,7 @@ def _translate_node(cell: dict) -> dict | None:
         if label == "REGISTRAR":
             # Whisper REGISTRAR names come in two shapes: ``iana:<id>`` (the
             # current registrar, an opaque IANA ID) and ``registrar:<name>``
-            # (historical, raw WHOIS string). Resolve both to a display name —
+            # (historical, raw WHOIS string). Resolve both to a display name -
             # the IANA ID via the vendored lookup (issue #61).
             cleaned = resolve_registrar_name(cleaned)
         if not cleaned:

@@ -1,23 +1,36 @@
+import re
+
 import pytest
 
 from src.connector.queries import (
     DEFAULT_LIMIT,
     DOMAIN_PIVOT_CAP,
+    MAX_QUERY_DEPTH,
     NETWORK_CONTEXT_LIMIT,
     QUERIES,
+    THREAT_CONTEXT_QUERIES,
     THREAT_FEED_LIMIT,
     THREAT_FLAG_FIELDS,
     generate_domain_variants,
+    get_asn_name_query,
     get_domain_direct_fact_queries,
     get_domain_pivot_queries,
+    get_links_to_queries,
     get_network_context_query,
     get_query_for_entity_type,
     get_spf_policy_query,
+    get_static_prefix_query,
     get_threat_context_query,
     get_variant_existence_query,
     get_whois_phone_query,
     supported_entity_types,
 )
+
+
+def _relationship_hops(q: str) -> int:
+    matched_patterns = re.findall(r"-\[[^\]]*\]-", q)
+    assert all("*" not in pattern for pattern in matched_patterns), q
+    return len(matched_patterns)
 
 
 def test_supported_entity_types_is_the_mvp_set():
@@ -34,7 +47,7 @@ def test_get_query_substitutes_value_and_limit_into_literals():
     assert q is not None
     assert '"8.8.8.8"' in q
     assert "LIMIT 42" in q
-    # No placeholders should remain — Whisper doesn't accept params.
+    # No placeholders should remain - Whisper doesn't accept params.
     assert "$value" not in q
     assert "$limit" not in q
 
@@ -54,7 +67,7 @@ def test_get_query_json_escapes_value_for_safety():
 
 
 def test_get_query_returns_a_query_for_every_broad_query_type():
-    # Domain-Name no longer rides the broad one-hop template (issue #61 —
+    # Domain-Name no longer rides the broad one-hop template (issue #61 -
     # it uses targeted directional builders), so the broad-query contract
     # covers IP/ASN seeds only.
     for entity_type in QUERIES:
@@ -130,7 +143,7 @@ def test_threat_context_query_skipped_for_autonomous_system():
 
 def test_threat_context_query_returns_all_flag_columns():
     # Every entry in THREAT_FLAG_FIELDS must surface as a column in the
-    # projection — otherwise the connector will silently miss flags when
+    # projection - otherwise the connector will silently miss flags when
     # rendering the Note.
     q = get_threat_context_query("Domain-Name", value="example.test")
     assert q is not None
@@ -139,7 +152,7 @@ def test_threat_context_query_returns_all_flag_columns():
 
 
 def test_threat_context_query_inlines_value_and_limit():
-    # Whisper rejects request-body params — both must be Cypher literals.
+    # Whisper rejects request-body params - both must be Cypher literals.
     q = get_threat_context_query("IPv4-Addr", value="8.8.8.8", limit=33)
     assert q is not None
     assert '"8.8.8.8"' in q
@@ -173,18 +186,15 @@ def test_network_context_query_supported_for_ipv4_and_ipv6():
         q = get_network_context_query(entity_type, value="x", limit=5)
         assert q is not None
         assert ip_label in q
-        # 2-hop chain to the announcing ASN must be present — that's the
+        # 2-hop chain to the announcing ASN must be present - that's the
         # whole point of the query.
         assert "ANNOUNCED_BY" in q
         assert ":ANNOUNCED_PREFIX" in q
         assert "ROUTES" in q
         assert ":ASN" in q
-        # HAS_NAME→ASN_NAME for the human-readable label, BELONGS_TO→PREFIX
-        # for the static allocation.
-        assert "HAS_NAME" in q
-        assert ":ASN_NAME" in q
-        assert "BELONGS_TO" in q
-        assert ":PREFIX" in q
+        assert "HAS_NAME" not in q
+        assert "BELONGS_TO" not in q
+        assert "OPTIONAL MATCH" not in q
 
 
 def test_network_context_query_skipped_for_domain_and_asn():
@@ -197,7 +207,7 @@ def test_network_context_query_skipped_for_domain_and_asn():
 
 def test_network_context_query_returns_seed_and_asn_cells():
     # The caller lifts Whisper nodeIds from these to wire the synthetic
-    # IP→AS related-to edge — if either alias goes missing the connector
+    # IP→AS related-to edge - if either alias goes missing the connector
     # can't pair the AS SCO with the seed.
     q = get_network_context_query("IPv4-Addr", value="8.8.8.8")
     assert q is not None
@@ -229,6 +239,98 @@ def test_network_context_query_rejects_zero_or_empty():
 def test_network_context_query_unsupported_type_returns_none():
     for entity_type in ("Url", "StixFile", "Email-Addr", ""):
         assert get_network_context_query(entity_type, value="x") is None
+
+
+def test_asn_name_query_inlines_names_and_returns_aliases():
+    q = get_asn_name_query(["AS15169", "AS3333", "AS15169"])
+    assert q is not None
+    assert q.startswith('UNWIND ["AS15169", "AS3333", "AS15169"] AS a')
+    assert " AS asn" in q
+    assert " AS asnDescription" in q
+    assert f"LIMIT {NETWORK_CONTEXT_LIMIT}" in q
+
+
+def test_asn_name_query_returns_none_for_filtered_empty_list():
+    assert get_asn_name_query([]) is None
+    assert get_asn_name_query([""]) is None
+
+
+def test_asn_name_query_rejects_zero_limit():
+    with pytest.raises(ValueError):
+        get_asn_name_query(["AS15169"], limit=0)
+
+
+def test_static_prefix_query_supported_for_ipv4_and_ipv6():
+    for entity_type, ip_label in (
+        ("IPv4-Addr", ":IPV4"),
+        ("IPv6-Addr", ":IPV6"),
+    ):
+        q = get_static_prefix_query(entity_type, value="x", limit=5)
+        assert q is not None
+        assert ip_label in q
+        assert " AS prefix" in q
+        assert "LIMIT 5" in q
+        assert "$value" not in q and "$limit" not in q
+
+
+def test_static_prefix_query_unsupported_type_returns_none():
+    assert get_static_prefix_query("Domain-Name", value="example.test") is None
+    assert get_static_prefix_query("Autonomous-System", value="AS15169") is None
+
+
+def test_static_prefix_query_rejects_zero_or_empty():
+    with pytest.raises(ValueError):
+        get_static_prefix_query("IPv4-Addr", value="", limit=5)
+    with pytest.raises(ValueError):
+        get_static_prefix_query("IPv4-Addr", value="1.1.1.1", limit=0)
+
+
+def test_every_query_template_stays_within_anonymous_depth():
+    old_network_context = (
+        "MATCH (ip:IPV4)-[:ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)"
+        "-[:ROUTES]->(asn:ASN) "
+        "OPTIONAL MATCH (asn)-[:HAS_NAME]->(asn_name:ASN_NAME) "
+        "OPTIONAL MATCH (ip)-[:BELONGS_TO]->(p:PREFIX)"
+    )
+    assert _relationship_hops(old_network_context) == 4
+
+    queries = [
+        *(get_query_for_entity_type(entity_type, "x") for entity_type in QUERIES),
+        *(
+            get_threat_context_query(entity_type, "x")
+            for entity_type in THREAT_CONTEXT_QUERIES
+        ),
+        *(
+            get_network_context_query(entity_type, "x")
+            for entity_type in ("IPv4-Addr", "IPv6-Addr")
+        ),
+        *(
+            get_static_prefix_query(entity_type, "x")
+            for entity_type in ("IPv4-Addr", "IPv6-Addr")
+        ),
+        get_asn_name_query(["AS15169", "AS3333"]),
+        *get_links_to_queries("Domain-Name", "example.test").values(),
+        *get_domain_direct_fact_queries("example.test").values(),
+        *(
+            query
+            for spec in get_domain_pivot_queries("example.test").values()
+            for query in spec.values()
+        ),
+        get_spf_policy_query("example.test"),
+        get_whois_phone_query("example.test"),
+        get_variant_existence_query(["a.test"]),
+    ]
+    for q in queries:
+        assert q is not None
+        assert _relationship_hops(q) <= MAX_QUERY_DEPTH, q
+
+
+def test_split_network_context_query_depths():
+    assert _relationship_hops(get_network_context_query("IPv4-Addr", "x")) == 2
+    assert _relationship_hops(get_network_context_query("IPv6-Addr", "x")) == 2
+    assert _relationship_hops(get_asn_name_query(["AS15169"])) == 1
+    assert _relationship_hops(get_static_prefix_query("IPv4-Addr", "x")) == 1
+    assert _relationship_hops(get_static_prefix_query("IPv6-Addr", "x")) == 1
 
 
 # --- Targeted Domain-Name enrichment builders (issue #61) ------------------

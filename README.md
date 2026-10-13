@@ -1,6 +1,6 @@
 # OpenCTI Whisper Connector
 
-> **MVP** — first cut of the connector implementing the agreed spec under
+> **MVP** - first cut of the connector implementing the agreed spec under
 > [milestone #1](https://github.com/whisper-sec/whisper-opencti/milestone/1).
 > Production-ready for the supported entity types below. Threat-property
 > enrichment, multi-hop traversals, and Url / file-hash scopes are out of
@@ -17,7 +17,7 @@
   - [Whisper-Specific Configuration](#whisper-specific-configuration)
 - [Deployment](#deployment)
   - [Local Dev Stack](#local-dev-stack)
-  - [QA Stack — Validating a Published Image](#qa-stack--validating-a-published-image)
+  - [QA Stack - Validating a Published Image](#qa-stack--validating-a-published-image)
   - [Production / External Deployment](#production--external-deployment)
   - [Manual Deployment](#manual-deployment)
 - [Usage](#usage)
@@ -36,15 +36,15 @@
 
 ## Introduction
 
-OpenCTI connector that enriches observables — IPv4, IPv6, domain names, and
-Autonomous Systems — with relationship data from the
+OpenCTI connector that enriches observables - IPv4, IPv6, domain names, and
+Autonomous Systems - with relationship data from the
 [Whisper graph](https://whisper.security).
 
 When you click **Enrich → Whisper** on a supported observable in OpenCTI, the
 connector runs a one-hop Cypher query against Whisper anchored on that
 observable's value, translates the matching nodes and edges into STIX 2.1
 objects + relationships, and pushes the resulting bundle back into OpenCTI.
-Re-enrichment is idempotent — STIX SCOs use deterministic IDs derived from
+Re-enrichment is idempotent - STIX SCOs use deterministic IDs derived from
 their key properties, so the same indicator always produces the same set of
 STIX object IDs.
 
@@ -61,9 +61,9 @@ returned that don't conform to RFC 1035.
 
 | Component | Version |
 | --- | --- |
-| OpenCTI platform | **7.260701.0** (verified). The platform and `pycti` are now released in lockstep on the same CalVer string — bumping one without the other will fail at connector registration time (mismatched GraphQL schema). |
+| OpenCTI platform | **7.260706.0** (verified). The platform and `pycti` are now released in lockstep on the same CalVer string - bumping one without the other will fail at connector registration time (mismatched GraphQL schema). |
 | Python (image runtime) | 3.12 (alpine) |
-| `pycti` | 7.260701.0 (pinned to match the platform version exactly) |
+| `pycti` | 7.260706.0 (pinned to match the platform version exactly) |
 | `pydantic` | >=2.8.2, <3.0.0 |
 | `stix2` | 3.0.1 |
 | `validators` | 0.35.0 |
@@ -72,7 +72,7 @@ returned that don't conform to RFC 1035.
 
 If you upgrade OpenCTI to a new minor, bump `pycti` in
 [src/requirements.txt](./src/requirements.txt) and the platform/worker image tags in
-[docker-compose.dev.yml](./docker-compose.dev.yml) together — running
+[docker-compose.dev.yml](./docker-compose.dev.yml) together - running
 mismatched versions causes the connector to fail at registration time.
 
 ## Configuration
@@ -85,16 +85,16 @@ also accepted in a mounted `config.yml` (see
 
 | Env var | Required | Default | Description |
 | --- | --- | --- | --- |
-| `OPENCTI_URL` | yes | — | URL of your OpenCTI platform reachable from the connector container, e.g. `http://opencti:8080`. |
-| `OPENCTI_TOKEN` | yes | — | Token of an OpenCTI user with permission to write observables and relationships. Don't reuse the admin token in production. |
+| `OPENCTI_URL` | yes | - | URL of your OpenCTI platform reachable from the connector container, e.g. `http://opencti:8080`. |
+| `OPENCTI_TOKEN` | yes | - | Token of an OpenCTI user with permission to write observables and relationships. Don't reuse the admin token in production. |
 
 ### Base Connector Configuration
 
 | Env var | Required | Default | Description |
 | --- | --- | --- | --- |
-| `CONNECTOR_ID` | yes | — | A unique UUIDv4 for this connector instance. Generate once with `uuidgen` and keep it stable across restarts. |
+| `CONNECTOR_ID` | yes | - | A unique UUIDv4 for this connector instance. Generate once with `uuidgen` and keep it stable across restarts. |
 | `CONNECTOR_NAME` | no | `Whisper` | Display name in the OpenCTI UI. |
-| `CONNECTOR_TYPE` | no | `INTERNAL_ENRICHMENT` | Do not change — the connector is an internal-enrichment type only. |
+| `CONNECTOR_TYPE` | no | `INTERNAL_ENRICHMENT` | Do not change - the connector is an internal-enrichment type only. |
 | `CONNECTOR_SCOPE` | no | `IPv4-Addr,IPv6-Addr,Domain-Name,Autonomous-System` | Which entity types this connector responds to. Adding types that the connector doesn't actually support (e.g. `Url`, `StixFile`) just produces "not supported" log lines. |
 | `CONNECTOR_AUTO` | no | `false` | If `true`, OpenCTI automatically enriches every new in-scope observable. Leave `false` until you're confident about Whisper API quota. |
 | `CONNECTOR_LOG_LEVEL` | no | `error` | One of `debug`, `info`, `warning`, `error`. |
@@ -103,8 +103,8 @@ also accepted in a mounted `config.yml` (see
 
 | Env var | Required | Default | Description |
 | --- | --- | --- | --- |
-| `WHISPER_API_URL` | yes | — | Base URL of the Whisper graph API, typically `https://graph.whisper.security`. The connector POSTs Cypher queries to `<api_url>/api/query`. |
-| `WHISPER_API_KEY` | yes | — | Your Whisper API key. Sent in the `X-API-Key` header on every request. Never logged. |
+| `WHISPER_API_URL` | yes | - | Base URL of the Whisper graph API, typically `https://graph.whisper.security`. The connector POSTs Cypher queries to `<api_url>/api/query`. |
+| `WHISPER_API_KEY` | yes | - | Your Whisper API key. Sent in the `X-API-Key` header on every request. Never logged. |
 | `WHISPER_MAX_TLP` | no | `TLP:AMBER+STRICT` | Maximum TLP marking the connector will enrich. Observables marked above this level are skipped with a `WhisperTlpError` status. Allowed values: `TLP:WHITE`, `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT`, `TLP:RED`. |
 
 ## Deployment
@@ -121,13 +121,13 @@ cp .env.example .env
 $EDITOR .env                          # set WHISPER_API_KEY=<your-real-key>
 ```
 
-[.env.example](./.env.example) is the **single source of truth** — committed,
+[.env.example](./.env.example) is the **single source of truth** - committed,
 with working dev defaults for every variable. `.env` is gitignored. The
 Makefile reads `.env` only; without it the make targets exit with a hint.
 
 The placeholder `WHISPER_API_KEY=dev-placeholder-key` in `.env.example` lets
 the connector start and register with OpenCTI even before you set a real
-key — but every enrichment call fails with `WhisperAuthError` until you
+key - but every enrichment call fails with `WhisperAuthError` until you
 replace it with a real Whisper Security key in your `.env`.
 
 #### 2. Bring up the stack
@@ -141,24 +141,24 @@ make dev-clean     # stop and wipe volumes for a fresh start
 ```
 
 OpenCTI is at <http://localhost:8080> (login from `.env`:
-`admin@whisper.local` / `ChangeMe-dev-only` per the committed defaults —
+`admin@whisper.local` / `ChangeMe-dev-only` per the committed defaults -
 **dev only, not for production**).
 
-### QA Stack — Validating a Published Image
+### QA Stack - Validating a Published Image
 
 This is the path for QA validating a release candidate or stable release. The
 QA stack pulls the published image from GHCR (rather than building from
 source) and runs it against a full stock OpenCTI for end-to-end testing.
 
 If you've already followed the dev quickstart above, you can re-use the same
-`.env` — but each step below is also self-contained, so you can come here
+`.env` - but each step below is also self-contained, so you can come here
 cold.
 
 #### Prerequisites
 
 - Docker Desktop (or compatible engine) with at least **6 GB RAM** available, and `make`.
 - A GitHub account with access to the `whisper-sec` org (the package is private).
-- A real Whisper API key — request from Whisper Security.
+- A real Whisper API key - request from Whisper Security.
 - Outbound HTTPS network access from your host to `graph.whisper.security`.
 
 #### 1. Create a GitHub PAT with `read:packages`
@@ -182,8 +182,8 @@ it for `whisper-sec`. Without this step `docker login` will fail with
 
 ```bash
 docker login ghcr.io
-# Username: <your-github-username>      (your account name — not whisper-sec)
-# Password: <paste your PAT>            (hidden as you paste — NOT your GitHub password)
+# Username: <your-github-username>      (your account name - not whisper-sec)
+# Password: <paste your PAT>            (hidden as you paste - NOT your GitHub password)
 ```
 
 Expected: `Login Succeeded`. The credential is saved to your local
@@ -224,7 +224,7 @@ make qa-logs       # tail logs across the stack
 ```
 
 The QA stack uses Compose project name `whisper-opencti-qa`, so it can
-coexist on disk with the dev stack — but they **cannot run simultaneously**
+coexist on disk with the dev stack - but they **cannot run simultaneously**
 (both bind `OPENCTI_PORT`). Run `make dev-down` first if the dev stack is up.
 
 #### 5. Stop and clean up
@@ -256,7 +256,7 @@ the full list):
 
 | Tag | Use when |
 | --- | --- |
-| `vMAJOR.MINOR.PATCH` (e.g. `v1.0.0`) | Production — pin to a specific release. The entry tagged **Latest** on the releases page. |
+| `vMAJOR.MINOR.PATCH` (e.g. `v1.0.0`) | Production - pin to a specific release. The entry tagged **Latest** on the releases page. |
 | `vMAJOR.MINOR.PATCH-rcN` | Pre-release / release candidate. Entries tagged **Pre-release**. |
 | `latest` | Whatever was most recently tagged as a stable release. Only if you accept automatic updates on `docker pull`. |
 
@@ -286,13 +286,13 @@ service (default port 8080) and outbound HTTPS to Whisper.
 ### Manual Deployment
 
 If you can't or don't want to use Docker, the connector is a plain Python
-package — see [Development](#development) below for the local-venv install
+package - see [Development](#development) below for the local-venv install
 flow.
 
 ## Usage
 
 1. Open the OpenCTI UI and sign in.
-2. **Data → Ingestion → Connectors** — confirm the `Whisper` connector is
+2. **Data → Ingestion → Connectors** - confirm the `Whisper` connector is
    `Started` and the scope matches what you configured.
 3. **Data → Observations → Observables → Create**: pick a supported entity
    type (e.g. `IPv4-Addr`, value `8.8.8.8`).
@@ -319,7 +319,7 @@ real Whisper data and the resulting STIX shapes.
 | `Autonomous-System` | `ASN` |
 
 `Url`, `StixFile`, and `Email-Addr` are deliberately **not** in scope for the
-MVP — Whisper has no direct label for URLs or file hashes, and email
+MVP - Whisper has no direct label for URLs or file hashes, and email
 enrichment isn't part of the v1 spec. See
 [docs/qa-handoff.md](./docs/qa-handoff.md) for the full known-limitations
 list.
@@ -331,7 +331,7 @@ For each enrichment request the connector:
 1. Resolves the observable from OpenCTI's API.
 2. Picks the matching Cypher template (per entity type), substitutes
    `$value` (JSON-escaped string literal) and `$limit` (integer literal)
-   into the query — Whisper's Cypher engine rejects request-body params, so
+   into the query - Whisper's Cypher engine rejects request-body params, so
    everything is inlined.
 3. POSTs the query to `<WHISPER_API_URL>/api/query` with `X-API-Key`. Retries
    429, 5xx, and transport errors three times with exponential backoff
@@ -348,10 +348,11 @@ For each enrichment request the connector:
    allocation PREFIX).
 8. Runs the canonical [whisper.security catalog](https://github.com/whisper-sec/whisper-catalog)
    procedures (`whisper.identify`, `whisper.assess`, `whisper.explain`) and
-   folds their authoritative signals into a single assessment Note (see
+   folds their signals into a single assessment Note (see
    [Graph enrichment via the whisper.security catalog](#graph-enrichment-via-the-whispersecurity-catalog)).
-9. Assembles a single STIX 2.1 bundle with the SCOs, SDOs, relationships,
-   and Notes, and ships it to OpenCTI for ingestion.
+9. Assembles a single STIX 2.1 bundle - led by the `Whisper` author
+   `Identity` that every other object references - with the SCOs, SDOs,
+   relationships, and Notes, and ships it to OpenCTI for ingestion.
 
 See [docs/architecture.md](./docs/architecture.md) for the per-module deep
 dive.
@@ -363,7 +364,7 @@ dive.
 | `IPV4` | `ipv4-addr` SCO |
 | `IPV6` | `ipv6-addr` SCO |
 | `HOSTNAME` (real domain) | `domain-name` SCO |
-| `HOSTNAME` (IP-shaped — Whisper data quirk) | reclassified to `ipv4-addr` / `ipv6-addr` |
+| `HOSTNAME` (IP-shaped - Whisper data quirk) | reclassified to `ipv4-addr` / `ipv6-addr` |
 | `ASN` | `autonomous-system` SCO |
 | `EMAIL` | `email-addr` SCO |
 | `COUNTRY` | `Location` SDO (country) |
@@ -375,29 +376,33 @@ dive.
 Whisper edges all collapse to STIX `related-to`. The original Whisper edge
 type (`NAMESERVER_FOR`, `MAIL_FOR`, `BELONGS_TO`, `ANNOUNCED_BY`, `LINKS_TO
 outbound`, `LINKS_TO inbound`, etc.) is preserved in the relationship
-`description` field — analysts can grep / filter in the UI.
+`description` field - analysts can grep / filter in the UI.
 
 ### Generated STIX Objects
 
 Per enrichment the bundle ships:
 
+- A `Whisper` author `Identity` SDO (organization) leading every non-empty
+  bundle. All other objects are attributed to it - SDOs, relationships, and
+  Notes via `created_by_ref`, SCOs via the OpenCTI
+  `x_opencti_created_by_ref` custom property - so analysts can filter
+  Whisper-sourced intel by author in the UI
 - SCOs for the seed + every mappable neighbour
 - `related-to` relationships preserving the original Whisper edge type in
   `description`
 - `resolves-to` relationships (oriented domain → IP) for DNS records
-- Analyst-visible `Note` SDOs attached to the seed:
+- Up to five analyst-visible `Note` SDOs attached to the seed:
   - `Whisper graph catalog assessment` - the canonical
     `whisper.identify` / `whisper.assess` / `whisper.explain` signals, with
     docs deep-links (see below)
-  - `LINKS_TO neighbour overflow` — when Whisper has more than 25 LINKS_TO
+  - `LINKS_TO neighbour overflow` - when Whisper has more than 25 LINKS_TO
     neighbours in either direction
-  - `Whisper threat intelligence` / `Whisper threat feed evidence` - score,
-    level, true flags, ISO-8601 first/last seen, and feed listings (for
-    threat-listed seeds)
-  - `Whisper network context` — announced prefix, BGP flags
+  - `Whisper threat intelligence` - score, level, true flags, ISO-8601
+    first/last seen, and feed listings (for threat-listed seeds)
+  - `Whisper network context` - announced prefix, BGP flags
     (anycast/MOAS/withdrawn), ANNOUNCED_PREFIX threat level + score, static
     allocation (for IP seeds)
-  - `Whisper dropped non-RFC-1035 DNS records` — names like
+  - `Whisper dropped non-RFC-1035 DNS records` - names like
     `_spf.example.com` that Whisper has but OpenCTI rejects as malformed
     `domain-name` SCOs
 
@@ -446,7 +451,7 @@ the catalog changes.
 
 - `make dev-logs | grep connector-whisper` (or `docker logs <container>`). If
   the connector container is in a crash-loop, the message-frame is usually a
-  bad config error — most often missing `OPENCTI_URL`/`OPENCTI_TOKEN` or an
+  bad config error - most often missing `OPENCTI_URL`/`OPENCTI_TOKEN` or an
   invalid `CONNECTOR_ID`.
 - If the container is up but OpenCTI doesn't list it: the connector can't
   reach RabbitMQ. Check the platform-side `RABBITMQ__` env vars match and
@@ -462,7 +467,7 @@ the catalog changes.
 ### Enrichment runs but no relationships appear
 
 - Check the work item in OpenCTI: **Data → Connectors → Whisper → click a
-  recent work item**. The status string from the connector is shown there —
+  recent work item**. The status string from the connector is shown there -
   common ones:
   - `No Whisper data for <value>`: Whisper has no graph data for that
     observable. Verify with `query` against the live API (e.g. via the
@@ -492,7 +497,7 @@ The full test matrix lives in **[docs/qa-handoff.md](./docs/qa-handoff.md)**.
 That doc contains:
 
 - TC-01 through TC-17 covering green-path, edge-case, and failure scenarios
-- The **list of known MVP non-goals** — please don't file bugs against these
+- The **list of known MVP non-goals** - please don't file bugs against these
 - The **bug severity guide** (S1 critical → S4 cosmetic) and what to include
   in a bug report
 
@@ -504,19 +509,42 @@ appropriate severity.
 
 ### Development
 
+#### Local Setup
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r src/requirements.txt -r requirements-dev.txt
 
-make lint    # ruff check + ruff format --check
-make test    # pytest
+make lint           # isort + black + flake8 + pylint (STIX-ID)
+make test           # pytest (197 cases)
+make docker-build   # build Docker image locally
+make dev-up         # start full OpenCTI + connector stack
 ```
 
 The full suite covers the HTTP client, STIX mapper, result parser, and the
 connector callback. CI runs lint + tests + a Docker image build on every PR
-to `main` and `develop` — see
+to `main` and `develop` - see
 [.github/workflows/ci.yml](./.github/workflows/ci.yml) for the live count
 and current status.
+
+#### Contribution Workflow
+
+All changes follow a pre-PR validation workflow:
+
+- Create a feature branch (never commit directly to `develop` or `main`).
+- Run the local CI checks: `make lint && make test && make docker-build`.
+- Push the feature branch and open a PR for human review (no direct pushes to protected branches).
+
+**Use a feature branch + full validation for:**
+- Bug fixes (especially those touching core logic)
+- Security issues
+- Constraint violations (RFC 1035, STIX ID generation, version mismatches)
+- Changes affecting multiple modules
+
+**Skip to direct implementation for:**
+- Documentation-only changes
+- Test additions that don't change connector behavior
+- Simple configuration tweaks
 
 ### Repository Layout
 
@@ -530,11 +558,12 @@ and current status.
 │   └── qa-handoff.md       # QA test matrix + known limitations
 ├── src/
 │   ├── main.py             # Entry point (OpenCTI startup retry + run)
-│   ├── requirements.txt    # Runtime deps (pycti, stix2, …) — in src/ per template
+│   ├── requirements.txt    # Runtime deps (pycti, stix2, …) - in src/ per template
 │   └── connector/
 │       ├── connector.py        # WhisperConnector class + callback
 │       ├── whisper_client.py   # HTTP client with retries (5xx + 429)
 │       ├── queries.py          # Cypher templates per entity type
+│       ├── catalog.py          # Canonical whisper.security catalog procedures
 │       ├── result_parser.py    # Whisper rows → normalized nodes/edges
 │       ├── converter_to_stix.py # Normalized → STIX 2.1 bundle
 │       └── exceptions.py
@@ -542,8 +571,8 @@ and current status.
 ├── Dockerfile
 ├── docker-compose.yml      # Connector-only snippet for existing OpenCTI deployments
 ├── docker-compose.base.yml # Shared OpenCTI stack (used by dev + qa flavours)
-├── docker-compose.dev.yml  # Dev flavour — connector built from source
-├── docker-compose.qa.yml   # QA flavour — connector pulled from GHCR
+├── docker-compose.dev.yml  # Dev flavour - connector built from source
+├── docker-compose.qa.yml   # QA flavour - connector pulled from GHCR
 ├── Makefile                # dev-up / qa-up / test / lint
 ├── config.yml.sample
 ├── .env.example            # Single source of truth; cp to .env (gitignored)
@@ -552,11 +581,11 @@ and current status.
 
 ### Further Reading
 
-- [docs/architecture.md](./docs/architecture.md) — system design and
+- [docs/architecture.md](./docs/architecture.md) - system design and
   per-module deep dive for engineers onboarding to the codebase.
-- [docs/scenarios/](./docs/scenarios/) — three worked enrichment scenarios
+- [docs/scenarios/](./docs/scenarios/) - three worked enrichment scenarios
   with real Whisper data and the resulting STIX shapes.
-- [docs/qa-handoff.md](./docs/qa-handoff.md) — QA test matrix, known
+- [docs/qa-handoff.md](./docs/qa-handoff.md) - QA test matrix, known
   limitations, severity guide.
 
 ### Limitations
@@ -576,9 +605,9 @@ for the authoritative list. The headline items today:
 - No cross-enrichment rate-limit-bucket awareness.
 - Custom STIX relationship types are not emitted; the original Whisper edge
   type is preserved in the relationship `description`.
-- No automated integration test against the live Whisper API in CI — QA-time
+- No automated integration test against the live Whisper API in CI - QA-time
   smoke against the real key is the end-to-end check.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](./LICENSE).
+Licensed under the [MIT License](./LICENSE).

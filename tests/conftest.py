@@ -2,34 +2,35 @@
 
 pytest auto-discovers ``conftest.py`` and makes its fixtures available to
 every test module in the same directory tree without per-file imports.
-Layout matches the upstream OpenCTI-Platform/connectors template — see
+Layout matches the upstream OpenCTI-Platform/connectors template - see
 the [`tests/conftest.py`](https://github.com/OpenCTI-Platform/connectors/blob/master/templates/internal-enrichment/tests/conftest.py)
 in the canonical internal-enrichment skeleton.
 
 Fixtures:
 
-- ``helper`` — a v7 ``OpenCTIConnectorHelper`` mock with an identity-ish
+- ``helper`` - a v7 ``OpenCTIConnectorHelper`` mock with an identity-ish
   ``stix2_create_bundle`` side_effect, so tests can ``json.loads`` the
   serialized bundle out of ``send_stix2_bundle.call_args``.
-- ``client`` — a ``WhisperClient`` mock spec'd against the real class.
-- ``make_config`` — factory returning real ``ConnectorSettings`` (connectors-sdk
+- ``client`` - a ``WhisperClient`` mock spec'd against the real class.
+- ``make_config`` - factory returning real ``ConnectorSettings`` (connectors-sdk
   ``BaseConnectorSettings``) instances with sane test defaults. Override
   ``whisper:`` fields via keyword arguments. The SDK loads config from env /
   ``config.yml`` and ignores constructor kwargs, so the factory injects test
-  values through a stub subclass that overrides ``_load_config_dict`` — the
+  values through a stub subclass that overrides ``_load_config_dict`` - the
   same pattern the upstream domaintools tests use.
-- ``config`` — convenience: a ``ConnectorSettings`` built via ``make_config()``
+- ``config`` - convenience: a ``ConnectorSettings`` built via ``make_config()``
   with no overrides.
-- ``connector`` — a ``WhisperConnector`` wired up with the above three.
+- ``connector`` - a ``WhisperConnector`` wired up with the above three.
 
 Module-level helpers (not fixtures):
 
-- ``_v7_payload(observable, *, event_type, stix_objects)`` — builds the v7
+- ``_v7_payload(observable, *, event_type, stix_objects)`` - builds the v7
   internal-enrichment callback dict. Tests use this rather than crafting
   the dict by hand so the shape stays consistent across the suite.
 """
 
 import json
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -39,19 +40,13 @@ from src.connector.settings import ConnectorSettings
 from src.connector.whisper_client import WhisperClient
 
 
-def build_settings(**whisper_overrides) -> ConnectorSettings:
-    """Construct a ``ConnectorSettings`` from a fixed in-memory config dict.
+def _test_config(**whisper_overrides) -> dict:
+    """Build the fixed in-memory config dict the settings stubs load from.
 
-    The connectors-sdk ``BaseConnectorSettings`` loads config from env vars and
-    ``config.yml`` and ignores constructor kwargs, so tests can't just pass
-    values in. Instead we subclass and override ``_load_config_dict`` (the
-    SDK's wrap-validator that does the load) to return our test dict — the
-    upstream domaintools tests use exactly this stub pattern.
-
-    ``whisper_overrides`` are merged into the ``whisper:`` block so a test can
-    do ``build_settings(max_tlp="TLP:AMBER")``.
+    ``whisper_overrides`` are merged into the ``whisper:`` block so a caller
+    can do ``_test_config(max_tlp="TLP:AMBER")``.
     """
-    cfg = {
+    return {
         "opencti": {"url": "http://localhost:8080", "token": "test-token"},
         "connector": {
             "id": "11111111-1111-1111-1111-111111111111",
@@ -68,10 +63,42 @@ def build_settings(**whisper_overrides) -> ConnectorSettings:
         },
     }
 
-    class _StubSettings(ConnectorSettings):
-        @classmethod
-        def _load_config_dict(cls, data, handler):
-            return handler(cfg)
+
+class StubConnectorSettings(ConnectorSettings):
+    """``ConnectorSettings`` that loads from an in-memory config dict.
+
+    The connectors-sdk ``BaseConnectorSettings`` loads config from env vars and
+    ``config.yml`` and ignores constructor kwargs, so tests can't just pass
+    values in. Instead we subclass and override ``_load_config_dict`` (the
+    SDK's wrap-validator that does the load) to return the ``_config`` class
+    attribute - the upstream domaintools tests use exactly this stub pattern.
+
+    Module-level (rather than a closure inside ``build_settings``) so
+    ``tests/test_settings.py`` can import it directly: the upstream Verified
+    linter (VC325) requires a valid-input ``*Settings()`` instantiation in
+    that file, and it does not scan ``conftest.py``.
+    """
+
+    # ClassVar keeps pydantic from treating this as a private instance attr,
+    # so `cls._config` stays readable from the classmethod below.
+    _config: ClassVar[dict] = _test_config()
+
+    @classmethod
+    def _load_config_dict(cls, data, handler):
+        return handler(cls._config)
+
+
+def build_settings(**whisper_overrides) -> ConnectorSettings:
+    """Construct a ``ConnectorSettings`` from a fixed in-memory config dict.
+
+    ``whisper_overrides`` are merged into the ``whisper:`` block so a test can
+    do ``build_settings(max_tlp="TLP:AMBER")``. A throwaway subclass carries
+    the override-merged dict so ``StubConnectorSettings`` itself stays
+    immutable (its own ``_config`` is the no-overrides default).
+    """
+
+    class _StubSettings(StubConnectorSettings):
+        _config: ClassVar[dict] = _test_config(**whisper_overrides)
 
     return _StubSettings()
 

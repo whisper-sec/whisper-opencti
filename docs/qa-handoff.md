@@ -1,4 +1,4 @@
-# QA hand-off — whisper-opencti MVP
+# QA hand-off - whisper-opencti MVP
 
 Everything QA needs to start testing the connector. Read top-to-bottom on
 first pass; bookmark the test matrix and severity guide for repeat reference.
@@ -31,13 +31,17 @@ Before running any test cases, confirm the green-path baseline works:
 5. Within a few seconds **Knowledge → Relationships** should populate.
 
 If step 5 doesn't happen, check the connector's most recent work item under
-**Data → Connectors → Whisper** — the status string from the callback is
+**Data → Connectors → Whisper** - the status string from the callback is
 recorded there.
 
 ## 2. Test data
 
 Use these indicators for repeatable runs. They're stable enough across days
 that the expected outcomes shouldn't shift wildly week-to-week.
+
+Every row below additionally gets a `Whisper graph catalog assessment` Note
+when the whisper.security catalog has an operator identity, a threat posture or
+a score for the seed (`whisper.identify` / `whisper.assess` / `whisper.explain`).
 
 | Entity type | Value | Expected outcome |
 | --- | --- | --- |
@@ -46,14 +50,21 @@ that the expected outcomes shouldn't shift wildly week-to-week.
 | `IPv6-Addr` | `2001:4860:4860::8888` | At least Country CA, City Montreal, CA, an `Autonomous-System` SCO for Google's announcing AS via `ANNOUNCED_BY`, plus the network-context Note. |
 | `Domain-Name` | `dns.google` | DNS + NAMESERVER_FOR pivot ([scenario 1](./scenarios/01-domain-dns-pivot.md)). Edges collapse to `related-to`; the original Whisper type (`RESOLVES_TO`, `NAMESERVER_FOR`, …) is preserved in the relationship `description`. |
 | `Domain-Name` | `malware-traffic-analysis.net` | LINKS_TO pivot with separate outbound/inbound rows (`description="LINKS_TO outbound"` / `"LINKS_TO inbound"`); FEED_SOURCE listings now surface as a `Whisper threat intelligence` Note attached to the seed ([scenario 3](./scenarios/03-threat-intel-pivot.md)). |
-| `Domain-Name` | `this-should-never-exist-12345.invalid` | No Whisper data → status string `No Whisper data for this-should-never-exist-12345.invalid`, no bundle sent. This is the reliable "no data" test seed — there is no equivalent IPv4 address (Whisper has BGP/DNS coverage on the RFC 5737 ranges, so `192.0.2.x` / `198.51.100.x` / `203.0.113.x` are *not* empty). |
-| `Autonomous-System` | `AS15169` (Google) | At least Country US (via `HAS_COUNTRY`). Routed prefixes / peer ASNs / ASN_NAME human label are NOT surfaced today — tracked as a follow-up. |
+| `Domain-Name` | `this-should-never-exist-12345.invalid` | No Whisper data → status string `No Whisper data for this-should-never-exist-12345.invalid`, no bundle sent. This is the reliable "no data" test seed - there is no equivalent IPv4 address (Whisper has BGP/DNS coverage on the RFC 5737 ranges, so `192.0.2.x` / `198.51.100.x` / `203.0.113.x` are *not* empty). |
+| `Autonomous-System` | `AS15169` (Google) | At least Country US (via `HAS_COUNTRY`). Routed prefixes / peer ASNs / ASN_NAME human label are NOT surfaced today - tracked as a follow-up. |
 | `Autonomous-System` | `AS13335` (Cloudflare) | At least Country US. Same ASN-side limitations apply. |
 | `Url` (out of scope) | any value | Status string `entity type 'Url' not supported by Whisper enrichment`. |
 | `StixFile` (out of scope) | any value | Status string `entity type 'StixFile' not supported by Whisper enrichment`. |
 
 The three worked walk-throughs in [docs/scenarios/](./scenarios/) show the
 expected shape of the resulting STIX bundles in detail.
+
+Every non-empty bundle leads with a `Whisper` author `Identity`
+(organization), and every other object is attributed to it
+(SDOs/relationships/Notes via `created_by_ref`, SCOs via
+`x_opencti_created_by_ref`) - so enriched entities show **Whisper** as
+their author in the OpenCTI UI, and the `N` in
+`Enriched … with N STIX objects` includes that Identity object.
 
 ## 3. Test case matrix
 
@@ -68,25 +79,25 @@ item) and the user-visible state in the UI.
 | **TC-03** | Green-path IPv6 | Create `IPv6-Addr 2001:4860:4860::8888`, enrich | Status `Enriched … with N STIX objects`. |
 | **TC-04** | Unsupported scope | Create `Url`, enrich | Connector is not offered in the Enrichment menu (OpenCTI filters by `CONNECTOR_SCOPE`). |
 | **TC-05** | Force unsupported via API | Trigger enrichment via OpenCTI GraphQL on a `Url` observable | Status `entity type 'Url' not supported by Whisper enrichment`. No bundle sent. |
-| **TC-06** | No Whisper data | Create `Domain-Name this-should-never-exist-12345.invalid`, enrich | Status `No Whisper data for this-should-never-exist-12345.invalid`. No bundle sent, no new relationships in the UI. (Whisper's BGP/DNS coverage means the RFC 5737 IPv4 ranges are *not* empty — see §2 for why this can't be triggered with a documentation IP.) |
+| **TC-06** | No Whisper data | Create `Domain-Name this-should-never-exist-12345.invalid`, enrich | Status `No Whisper data for this-should-never-exist-12345.invalid`. No bundle sent, no new relationships in the UI. (Whisper's BGP/DNS coverage means the RFC 5737 IPv4 ranges are *not* empty - see §2 for why this can't be triggered with a documentation IP.) |
 | **TC-07** | Empty value | Create observable with missing `value` (edge case via API) | Status contains `no value to enrich`. |
 | **TC-08** | Bad API key | Set `WHISPER_API_KEY=invalid` in env, restart, enrich any seed | Work item marked **Failed**. Logs show `WhisperAuthError`. |
 | **TC-09** | Whisper unreachable | Block `graph.whisper.security` at the firewall, enrich any seed | Work item marked **Failed** after retries. Logs show `WhisperTransportError`. |
 | **TC-10** | Re-enrich idempotency | Run TC-01 twice in a row | Same `domain-name` / `ipv4-addr` SCO IDs both times. Existing entities are updated, not duplicated. |
-| **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. `PREFIX` / `RIR` / `TLD` etc. neighbours are absent (parser-dropped). `COUNTRY`/`CITY` ARE mapped now (Phase 2) — expect `Location` SDOs. |
+| **TC-11** | Mixed-label neighbours | Enrich `dns.google` | Bundle includes domain-name + relationships. `PREFIX` / `RIR` / `TLD` etc. neighbours are absent (parser-dropped). `COUNTRY`/`CITY` ARE mapped now (Phase 2) - expect `Location` SDOs. |
 | **TC-12** | Connector restart | `make dev-restart` mid-enrichment of a slow query | Connector re-registers cleanly; the in-flight work item is retried by OpenCTI. |
 | **TC-13** | Green-path AS | Create `Autonomous-System AS15169`, enrich | Status `Enriched AS15169 with N STIX objects (…ms)`. `Knowledge → Relationships` populated. |
 | **TC-14** | LINKS_TO direction + cap | Enrich `Domain-Name google.com` | **Knowledge → Relationships** has separate `LINKS_TO outbound` (seed → neighbour) and `LINKS_TO inbound` (neighbour → seed) rows in the `description` column. **Analyses → Notes** contains a `LINKS_TO neighbour overflow` note (google.com has ~12M inbound). |
 | **TC-15** | Threat intel Note | Enrich `Domain-Name malware-traffic-analysis.net` | **Analyses → Notes** contains a `Whisper threat intelligence` note with `Threat assessment: MEDIUM (score 3.169)`, ISO-8601 first/last seen, and a `Listed in 2 source(s)` block naming the feeds. |
-| **TC-16** | IP network context | Enrich `IPv4-Addr 8.8.8.8` | **Knowledge** shows a new `related-to` row pointing at an `Autonomous-System` SCO (`AS15169 — GOOGLE - Google LLC`) tagged `description="ANNOUNCED_BY"`. **Analyses → Notes** contains a `Whisper network context` note with announced prefix `8.8.8.0/24`, BGP flags, and `ANNOUNCED_PREFIX threat: LOW (score 1)`. |
+| **TC-16** | IP network context | Enrich `IPv4-Addr 8.8.8.8` | **Knowledge** shows a new `related-to` row pointing at an `Autonomous-System` SCO (`AS15169 - GOOGLE - Google LLC`) tagged `description="ANNOUNCED_BY"`. **Analyses → Notes** contains a `Whisper network context` note with announced prefix `8.8.8.0/24`, BGP flags, and `ANNOUNCED_PREFIX threat: LOW (score 1)`. |
 | **TC-17** | Re-enrich Note idempotency | Run TC-15 twice in a row | Same Note `standard_id` both times. OpenCTI does NOT create a duplicate Note. |
-| **TC-18** | TLP ceiling enforced | With default `WHISPER_MAX_TLP=TLP:AMBER+STRICT`, create `IPv4-Addr 203.0.113.42` with a `TLP:RED` `objectMarking`, enrich | Connector logs `WARNING: Refusing to enrich — TLP exceeds whisper.max_tlp`. Status string is `observable TLP marking 'TLP:RED' exceeds whisper.max_tlp='TLP:AMBER+STRICT'`. No Cypher query fired against Whisper. No bundle sent. |
-| **TC-19** | TLP ceiling raised | Set `WHISPER_MAX_TLP=TLP:RED`, restart, re-enrich the TC-18 observable | Enrichment proceeds normally — bundle ships. Confirms the ceiling is configurable. |
+| **TC-18** | TLP ceiling enforced | With default `WHISPER_MAX_TLP=TLP:AMBER+STRICT`, create `IPv4-Addr 203.0.113.42` with a `TLP:RED` `objectMarking`, enrich | Connector logs `WARNING: Refusing to enrich - TLP exceeds whisper.max_tlp`. Status string is `observable TLP marking 'TLP:RED' exceeds whisper.max_tlp='TLP:AMBER+STRICT'`. No Cypher query fired against Whisper. No bundle sent. |
+| **TC-19** | TLP ceiling raised | Set `WHISPER_MAX_TLP=TLP:RED`, restart, re-enrich the TC-18 observable | Enrichment proceeds normally - bundle ships. Confirms the ceiling is configurable. |
 | **TC-20** | Playbook chain pass-through | In a playbook that routes a `Url` observable (out of scope) through Whisper enrichment | Original `stix_objects` bundle ships back unchanged (status string `playbook pass-through: forwarded N STIX object(s)`). Downstream playbook nodes see the entity. No Cypher query fired. |
 
 ## 4. Known limitations / non-goals for the MVP
 
-These are intentional gaps in this release — please don't file bugs against
+These are intentional gaps in this release - please don't file bugs against
 them. Future-iteration items, each tracked in a follow-up ticket as the
 roadmap firms up.
 
@@ -109,16 +120,16 @@ roadmap firms up.
    (Organization / Registrar), and `autonomous-system` (via the Phase C
    network-context pass) SDOs. `FEED_SOURCE` and `ANNOUNCED_PREFIX`
    labels are now surfaced via Notes (see Phases B and C) rather than
-   silently dropped. Whisper labels that remain genuinely unmapped —
+   silently dropped. Whisper labels that remain genuinely unmapped -
    `PREFIX`, `REGISTERED_PREFIX`, `RIR`, `TLD`, `PHONE`, `EMAIL` (no
-   query template), `CATEGORY` — are still dropped at parse time.
+   query template), `CATEGORY` - are still dropped at parse time.
 4. **`Url` and `StixFile` are out of scope.** Whisper has no native label for
    URLs or file hashes.
 5. **Email-addr is technically supported in the mapper but not in the query
    templates.** The Whisper `EMAIL` label is rich but the v1 spec doesn't
    include email enrichment.
 6. **8.8.4.4 and similar IPs are returned by Whisper with label `HOSTNAME`.**
-   That's a Whisper data-side quirk — the parser trusts labels, so those IPs
+   That's a Whisper data-side quirk - the parser trusts labels, so those IPs
    surface as `domain-name` SCOs with IP-shaped values. STIX accepts it but
    downstream consumers may not. See
    [scenario 1](./scenarios/01-domain-dns-pivot.md). Mitigation in a
@@ -130,7 +141,7 @@ roadmap firms up.
    an enrichment is roughly three minutes; on hard exhaustion the work
    item fails with `WhisperTransportError` rather than `WhisperQueryError`
    so QA can route it to a quota-incident bucket. There is still no
-   rate-limit-bucket awareness across concurrent enrichments — out of
+   rate-limit-bucket awareness across concurrent enrichments - out of
    scope for the MVP.
 8. **Custom STIX relationship types are not emitted; the original Whisper
    edge type is preserved in the relationship `description`.** Specific
@@ -138,7 +149,7 @@ roadmap firms up.
    `ANNOUNCED_BY`, `LINKS_TO outbound`, `LINKS_TO inbound`, etc.) all
    collapse into STIX `related-to` because OpenCTI's worker rejects
    custom `relationship_type` values. The original semantics are NOT
-   lost — they're carried in the relationship's `description` field, so
+   lost - they're carried in the relationship's `description` field, so
    analysts can still filter / read the original Whisper edge name in
    the UI. Lifting these into proper custom STIX relationship types
    requires platform-side support (issue #31).
@@ -153,10 +164,10 @@ issues at <https://github.com/whisper-sec/whisper-opencti/issues>.
 
 | Severity | Definition | Example |
 | --- | --- | --- |
-| **S1 — critical** | Connector can't start, crashes on every enrichment, or corrupts data in OpenCTI. | Container crashloops on startup against valid config; every enrichment leaves the OpenCTI work item in a half-completed state. |
-| **S2 — major** | Green-path enrichment fails for a supported entity type, or produces clearly wrong STIX. | TC-01 fails. Bundle has `source_ref` pointing at a nonexistent object. `resolves-to` direction reversed. |
-| **S3 — minor** | A test case fails but a workaround exists; or behaviour is correct but logs are confusing. | TC-08 shows `WhisperAuthError` but the message is unclear. Connector logs at `info` are too chatty. |
-| **S4 — cosmetic** | Doc typos, UI label mismatch, log line formatting. | README link broken. |
+| **S1 - critical** | Connector can't start, crashes on every enrichment, or corrupts data in OpenCTI. | Container crashloops on startup against valid config; every enrichment leaves the OpenCTI work item in a half-completed state. |
+| **S2 - major** | Green-path enrichment fails for a supported entity type, or produces clearly wrong STIX. | TC-01 fails. Bundle has `source_ref` pointing at a nonexistent object. `resolves-to` direction reversed. |
+| **S3 - minor** | A test case fails but a workaround exists; or behaviour is correct but logs are confusing. | TC-08 shows `WhisperAuthError` but the message is unclear. Connector logs at `info` are too chatty. |
+| **S4 - cosmetic** | Doc typos, UI label mismatch, log line formatting. | README link broken. |
 
 When filing, please include:
 

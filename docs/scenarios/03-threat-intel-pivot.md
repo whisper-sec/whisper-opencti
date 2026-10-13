@@ -1,7 +1,7 @@
-# Scenario 3 — Threat-relevant hostname pivot
+# Scenario 3 - Threat-relevant hostname pivot
 
 **Seed**: a `Domain-Name` observable with value `malware-traffic-analysis.net`
-(a public malware-analysis blog — appears in two threat-intel feeds).
+(a public malware-analysis blog - appears in two threat-intel feeds).
 
 **Goal**: pivot from a domain that's flagged in threat feeds to related
 infrastructure / referenced domains, AND surface Whisper's threat assessment
@@ -15,7 +15,7 @@ analyst sees both the graph context and the threat verdict in one place.
 3. Connector returns:
    - hostnames the seed links to (per Whisper's web-link graph) as
      `domain-name` SCOs + `related-to` relationships (the `LINKS_TO`
-     supplementary pass — outbound and inbound, capped at 25 per direction);
+     supplementary pass - outbound and inbound, capped at 25 per direction);
    - a STIX `Note` summarising Whisper's threat assessment of the seed;
    - a STIX `Note` reporting any `LINKS_TO` overflow (e.g. "Whisper found
      320 inbound LINKS_TO neighbours; showing first 25").
@@ -27,18 +27,18 @@ analyst sees both the graph context and the threat verdict in one place.
 For a Domain-Name seed the connector now issues several Cypher templates
 back-to-back. The first three are the load-bearing ones for this scenario:
 
-1. **Main** — every neighbour except `LINKS_TO` (excluded to keep the main
+1. **Main** - every neighbour except `LINKS_TO` (excluded to keep the main
    bundle clean since `LINKS_TO` fan-out can be huge):
    ```cypher
    MATCH (n:HOSTNAME {name: $value})-[r]-(m) WHERE type(r) <> "LINKS_TO"
    RETURN n, r, m LIMIT 50
    ```
-2. **LINKS_TO directed (×2)** — outbound + inbound, with per-direction caps:
+2. **LINKS_TO directed (×2)** - outbound + inbound, with per-direction caps:
    ```cypher
    MATCH (n:HOSTNAME {name: $value})-[r:LINKS_TO]->(m:HOSTNAME) RETURN n, r, m LIMIT 25
    MATCH (n:HOSTNAME {name: $value})<-[r:LINKS_TO]-(m:HOSTNAME) RETURN n, r, m LIMIT 25
    ```
-3. **Threat-context** — seed-level threat fields + FEED_SOURCE listings:
+3. **Threat-context** - seed-level threat fields + FEED_SOURCE listings:
    ```cypher
    MATCH (n:HOSTNAME {name: $value})
    OPTIONAL MATCH (n)-[r:LISTED_IN]->(f:FEED_SOURCE)
@@ -48,7 +48,7 @@ back-to-back. The first three are the load-bearing ones for this scenario:
    ```
 
 Plus two count queries for the LINKS_TO overflow check. All values inlined
-as Cypher literals — Whisper's API rejects request-body params.
+as Cypher literals - Whisper's API rejects request-body params.
 
 ### Real Whisper threat-context response
 
@@ -70,14 +70,15 @@ as Cypher literals — Whisper's API rejects request-body params.
 
 Each row contributes one FEED_SOURCE listing. The seed-level fields are
 identical across rows so only the first row's score/level/flags are read.
-Boolean flags that are `false` are omitted from the Note — the analyst
+Boolean flags that are `false` are omitted from the Note - the analyst
 only sees the *positive* signals, not a noisy 13-column table.
 
 The connector then synthesises a single `Note` SDO, attaches it to the
 seed Domain-Name SCO via `object_refs`, and includes it in the bundle's
-`extra_objects`. The Note's STIX ID is a UUIDv5 keyed off
-`(seed_stix_id, content)` so re-enriching the same seed produces the
-same Note ID — OpenCTI dedupes cleanly.
+`extra_objects`. The Note's STIX ID comes from `pycti.Note.generate_id`,
+keyed off `(content, abstract)` with `created` left unset, so
+re-enriching the same seed produces the same Note ID - OpenCTI dedupes
+cleanly.
 
 ### Resulting STIX bundle (trimmed)
 
@@ -85,6 +86,8 @@ same Note ID — OpenCTI dedupes cleanly.
 {
   "type": "bundle",
   "objects": [
+    {"type": "identity", "id": "identity--<whisper-author>",
+     "name": "Whisper", "identity_class": "organization"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-mta>",
      "value": "malware-traffic-analysis.net"},
     {"type": "domain-name", "id": "domain-name--<uuid-of-bd>",

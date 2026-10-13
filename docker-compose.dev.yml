@@ -1,5 +1,5 @@
 # Dev flavour: builds connector-whisper from the local Dockerfile.
-# Compose this with docker-compose.base.yml — the Makefile's dev-* targets
+# Compose this with docker-compose.base.yml - the Makefile's dev-* targets
 # pass both files. The base file provides the OpenCTI stack; this file
 # adds the connector itself.
 

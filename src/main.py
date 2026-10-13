@@ -2,11 +2,11 @@
 
 Constructs:
 
-1. ``ConnectorSettings`` — the connectors-sdk ``BaseConnectorSettings`` model,
+1. ``ConnectorSettings`` - the connectors-sdk ``BaseConnectorSettings`` model,
    which loads the ``opencti:`` / ``connector:`` / ``whisper:`` config from env
    vars and the optional ``config.yml`` and validates it. ``to_helper_config()``
    produces the dict ``OpenCTIConnectorHelper`` consumes.
-2. ``OpenCTIConnectorHelper`` with ``playbook_compatible=True`` — required
+2. ``OpenCTIConnectorHelper`` with ``playbook_compatible=True`` - required
    by the v7 internal-enrichment callback contract (issue #65).
 
 Then hands both to ``WhisperConnector.run()``. Wrapped in
@@ -34,7 +34,7 @@ from src.connector.settings import ConnectorSettings
 logger = logging.getLogger("whisper.main")
 
 # Startup retry budget for the OpenCTI connection. Defaults give ~10 minutes
-# (120 × 5s) — generous enough for a cold OpenCTI/Elasticsearch boot, while
+# (120 × 5s) - generous enough for a cold OpenCTI/Elasticsearch boot, while
 # still surfacing a genuinely misconfigured/unavailable platform eventually.
 # Overridable via env for slower or faster environments.
 _STARTUP_MAX_RETRIES = int(os.environ.get("OPENCTI_STARTUP_MAX_RETRIES", "120"))
@@ -75,7 +75,7 @@ def _build_helper(
                 if not transient or attempt >= max_retries:
                     raise
                 logger.warning(
-                    "OpenCTI API not reachable yet (attempt %d/%d) — "
+                    "OpenCTI API not reachable yet (attempt %d/%d) - "
                     "retrying in %ds. Detail: %s",
                     attempt,
                     max_retries,

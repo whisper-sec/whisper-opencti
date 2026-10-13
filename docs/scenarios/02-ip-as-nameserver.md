@@ -1,4 +1,4 @@
-# Scenario 2 — IP used as a nameserver
+# Scenario 2 - IP used as a nameserver
 
 **Seed**: an `IPv4-Addr` observable with value `1.1.1.1`.
 
@@ -60,7 +60,7 @@ with `$value = "1.1.1.1"` and `$limit = 50`.
 The seed `1.1.1.1` (label `IPV4`) maps cleanly to an `ipv4-addr` SCO. Each
 `m` is a hostname that gets a `domain-name` SCO. `NAMESERVER_FOR` isn't in the
 parser's edge-translation table, so each edge becomes a STIX `related-to`
-relationship — with the IP as source and the hostname as target (the parser
+relationship - with the IP as source and the hostname as target (the parser
 preserves row order for non-directional STIX rels).
 
 The seed node is deduped across the eight rows so only one `ipv4-addr` SCO is
@@ -73,6 +73,7 @@ bundle.
 {
   "type": "bundle",
   "objects": [
+    {"type": "identity",     "id": "identity--<whisper-author>",    "name": "Whisper", "identity_class": "organization"},
     {"type": "ipv4-addr",    "id": "ipv4-addr--<uuid-of-1.1.1.1>",  "value": "1.1.1.1"},
     {"type": "domain-name",  "id": "domain-name--<uuid-of-colnet>", "value": "colnet.com.ar"},
     {"type": "domain-name",  "id": "domain-name--<uuid-of-wwwcol>", "value": "www.colnet.com.ar"},
@@ -95,13 +96,13 @@ bundle.
 ## Supplementary network context (issue #48 Phase C)
 
 For every `IPv4-Addr` / `IPv6-Addr` seed the connector also issues a
-**2-hop network-context query** that walks
-`(ip)-[:ANNOUNCED_BY]->(:ANNOUNCED_PREFIX)-[:ROUTES]->(:ASN)`,
-plus optional `HAS_NAME` (for the ASN's human label) and `BELONGS_TO`
-(static prefix). The result is folded into:
+2-hop chain query followed by two 1-hop lookups (`HAS_NAME` for the ASN
+label and `BELONGS_TO` for the static prefix), each within the depth-2
+`ANONYMOUS` cap (issue #60). The result is folded into:
 
 - a real `Autonomous-System` SCO in the bundle (clickable in OpenCTI,
-  deduped by UUIDv5 keyed off the Whisper ASN nodeId);
+  deduped by the stix2 library's deterministic SCO ID, keyed off the AS
+  number);
 - a `related-to` relationship `IP → AS` tagged
   `description="ANNOUNCED_BY"` so analysts can distinguish the announcing
   AS from any other ASN they later add by hand;
@@ -149,7 +150,7 @@ On the `1.1.1.1` observable:
 ## Why "related-to" instead of something specific
 
 STIX 2.1's standard relationship vocabulary doesn't have a `nameserver-for`
-type. The closest, semantically, would be a custom relationship type — which
+type. The closest, semantically, would be a custom relationship type - which
 OpenCTI accepts but breaks downstream STIX consumers that strictly validate.
 For the MVP we lean on `related-to` and rely on the source/target types
 + the `description` field to convey "this IP is a nameserver for this

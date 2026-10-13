@@ -7,7 +7,7 @@ OpenCTI-Platform/connectors#6708). These tests pin down the guarantees the
 
 1. ``WhisperConfig`` requires ``api_url`` / ``api_key`` and raises
    ``ValidationError`` when either is missing.
-2. ``api_key`` is a ``SecretStr`` — masked in ``repr``, readable via
+2. ``api_key`` is a ``SecretStr`` - masked in ``repr``, readable via
    ``get_secret_value()``.
 3. ``max_tlp`` defaults to ``TLP:AMBER+STRICT``.
 4. ``ConnectorSettings`` exposes the ``whisper:`` block and produces a valid
@@ -18,6 +18,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from src.connector.settings import ConnectorSettings, WhisperConfig
+from tests.conftest import StubConnectorSettings
 
 # --- WhisperConfig field validation ----------------------------------------
 
@@ -26,7 +27,7 @@ def test_whisper_config_construction_succeeds_with_required_fields():
     w = WhisperConfig(api_url="https://api.whisper.test", api_key="k")
     assert w.api_url == "https://api.whisper.test"
     assert w.api_key.get_secret_value() == "k"
-    # Default TLP ceiling: AMBER+STRICT — strict-by-default keeps customer
+    # Default TLP ceiling: AMBER+STRICT - strict-by-default keeps customer
     # intel out of the Whisper API unless the operator opts in.
     assert w.max_tlp == "TLP:AMBER+STRICT"
 
@@ -69,6 +70,17 @@ def test_whisper_config_accepts_every_canonical_tlp(tlp):
 
 
 # --- ConnectorSettings (top-level, via the make_config stub) ----------------
+
+
+def test_connector_settings_instantiates_from_valid_config():
+    # The upstream Verified linter (VC325) requires this file to contain a
+    # valid-input ``*Settings()`` instantiation outside any pytest.raises
+    # block (it does not scan conftest.py, hence the direct import).
+    settings = StubConnectorSettings()
+    assert isinstance(settings, ConnectorSettings)
+    assert settings.whisper.api_url == "https://api.whisper.test"
+    assert settings.whisper.api_key.get_secret_value() == "test-key"
+    assert settings.whisper.max_tlp == "TLP:RED"
 
 
 def test_connector_settings_exposes_whisper_block(make_config):

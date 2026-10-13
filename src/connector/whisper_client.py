@@ -37,7 +37,7 @@ class _RateLimitLoggingRetry(Retry):
     """``urllib3.Retry`` subclass that emits one info-level log per 429.
 
     urllib3 logs retries at WARN by default, which is too coarse for an
-    enrichment connector — when Whisper rate-limits, ops want to see it
+    enrichment connector - when Whisper rate-limits, ops want to see it
     at info so they can correlate spikes with quota windows without
     cranking urllib3's whole logger up. Only 429s log here; 5xx retries
     stay on urllib3's default channel.
@@ -105,7 +105,7 @@ class WhisperClient:
         # ``Retry-After`` is honoured automatically when present. With no
         # header, urllib3 falls back to the exponential backoff configured
         # via ``backoff_factor``. ``total=max_retries`` (3 by default) caps
-        # the worst-case hang at roughly 3 × max(backoff, Retry-After) —
+        # the worst-case hang at roughly 3 × max(backoff, Retry-After) -
         # for the common Whisper case of ``Retry-After: 60`` that's about
         # three minutes, which we judged the right ceiling for an
         # interactive enrichment work item (issue #30).

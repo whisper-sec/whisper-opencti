@@ -1,7 +1,7 @@
 """IANA registrar ID -> registrar name lookup (vendored reference data).
 
 Whisper stores a domain's CURRENT registrar (HAS_REGISTRAR) as a
-``REGISTRAR`` node named ``iana:<id>`` — an opaque IANA registrar ID
+``REGISTRAR`` node named ``iana:<id>`` - an opaque IANA registrar ID
 rather than a human-readable name (historical PREV_REGISTRAR nodes carry
 readable ``registrar:<name>`` strings). This table resolves those IDs to
 names so the connector emits a meaningful Identity SDO (issue #61).

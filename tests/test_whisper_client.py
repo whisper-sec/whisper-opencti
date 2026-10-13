@@ -224,7 +224,7 @@ def test_context_manager_closes_session(client):
 @responses.activate
 def test_execute_cypher_429_retried_then_recovers_after_200(client):
     # Three consecutive 429s with Retry-After: 0 (instant, keeps the test
-    # fast) followed by a 200 — urllib3 should burn through the 429s and
+    # fast) followed by a 200 - urllib3 should burn through the 429s and
     # surface the 200 body without raising.
     for _ in range(3):
         responses.add(

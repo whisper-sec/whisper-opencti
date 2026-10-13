@@ -22,7 +22,7 @@ class WhisperTlpError(Exception):
     """Raised when an observable's TLP marking exceeds ``whisper.max_tlp``.
 
     The connector must refuse to enrich beyond the configured TLP ceiling
-    — the connector's API key effectively grants access to whatever the
+    - the connector's API key effectively grants access to whatever the
     OpenCTI user it impersonates can see, so enriching past the ceiling
     would leak intel to a less-trusted Whisper account.
     """
