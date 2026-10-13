@@ -16,12 +16,14 @@ from src.connector.queries import (
     LINKS_TO_CAP,
     THREAT_FLAG_FIELDS,
     generate_domain_variants,
+    get_asn_name_query,
     get_domain_direct_fact_queries,
     get_domain_pivot_queries,
     get_links_to_queries,
     get_network_context_query,
     get_query_for_entity_type,
     get_spf_policy_query,
+    get_static_prefix_query,
     get_threat_context_query,
     get_variant_existence_query,
     get_whois_phone_query,
@@ -496,13 +498,16 @@ class WhisperConnector:
     ) -> tuple[list[dict], list[dict], list[stix2.Note]]:
         """For IPv4/IPv6 seeds, derive announcing-ASN context.
 
-        Returns (extra_nodes, extra_edges, notes). The Autonomous-System SCO
-        is synthesized from the ASN node returned by the supplementary
-        query (Whisper nodeId preserved for idempotent dedup), and an
-        IP→AS `related-to` edge with ``description="ANNOUNCED_BY"`` ties
-        them together. Prefix-level details (announced prefix, BGP flags,
-        ANNOUNCED_PREFIX threat score) collapse into a single Note attached
-        to the seed - there's no clean STIX SCO for a CIDR network.
+        Uses three depth-bounded round trips (depth 2 + 1 + 1) so ASN names
+        and static prefixes do not deepen or cross-join the announcing-ASN
+        chain. Returns (extra_nodes, extra_edges, notes). The
+        Autonomous-System SCO is synthesized from the ASN node returned by
+        the supplementary query (Whisper nodeId preserved for idempotent
+        dedup), and an IP→AS `related-to` edge with
+        ``description="ANNOUNCED_BY"`` ties them together. Prefix-level
+        details (announced prefix, BGP flags, ANNOUNCED_PREFIX threat score)
+        collapse into a single Note attached to the seed - there's no clean
+        STIX SCO for a CIDR network.
 
         Best-effort: caller wraps in try/except so a transport failure
         here can't kill the main bundle or the other supplementary Notes.
@@ -542,13 +547,13 @@ class WhisperConnector:
             if not match:
                 continue
             asn_number = int(match.group(1))
-            announcer = announcers_by_id.setdefault(
+            announcers_by_id.setdefault(
                 asn_id,
                 {
                     "asn_id": asn_id,
                     "asn_name": asn_name_str,
                     "asn_number": asn_number,
-                    "description": row.get("asnDescription"),
+                    "description": None,
                     "prefix": row.get("announcedPrefix"),
                     "score": row.get("apThreatScore"),
                     "level": row.get("apThreatLevel"),
@@ -557,13 +562,34 @@ class WhisperConnector:
                     "withdrawn": row.get("isWithdrawn"),
                 },
             )
-            if not announcer.get("description") and row.get("asnDescription"):
-                announcer["description"] = row.get("asnDescription")
-            if row.get("prefix"):
-                static_prefixes.add(row.get("prefix"))
 
         if not announcers_by_id:
             return [], [], []
+
+        asn_names = sorted(
+            {announcer["asn_name"] for announcer in announcers_by_id.values()}
+        )
+        asn_name_query = get_asn_name_query(asn_names)
+        if asn_name_query is not None:
+            asn_name_result = self.client.execute_cypher(asn_name_query)
+            for name_record in asn_name_result.rows:
+                asn_name = name_record.get("asn")
+                description = name_record.get("asnDescription")
+                if not description:
+                    continue
+                for announcer in announcers_by_id.values():
+                    if announcer["asn_name"] == asn_name and not announcer.get(
+                        "description"
+                    ):
+                        announcer["description"] = description
+
+        static_prefix_query = get_static_prefix_query(entity_type, entity_value)
+        if static_prefix_query is not None:
+            static_prefix_result = self.client.execute_cypher(static_prefix_query)
+            for prefix_record in static_prefix_result.rows:
+                prefix = prefix_record.get("prefix")
+                if prefix:
+                    static_prefixes.add(prefix)
 
         # Synthesize the seed IP node so any edge we emit has a matching
         # entry in `nodes` - covers the case where the main query returned

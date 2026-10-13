@@ -177,12 +177,12 @@ Hierarchical behavior spec: **Feature → Specification → Behaviour details**.
 ---
 
 ## Feature: IP Network Context (Announcing ASN)
-<!-- source: src/connector/connector.py:41-64, 456-620, src/connector/queries.py:203-269; verified: tests/test_connector.py:968-1233; date: 2026-07-18 -->
+<!-- source: src/connector/connector.py:41-64, 456-620, src/connector/queries.py:209-319; verified: tests/test_connector.py:968-1233; date: 2026-09-21 -->
 
 ### Specification: Announcing-ASN SCO + Prefix/BGP Note for IP Seeds
 
 - **Trigger**: `_collect_network_context(entity_type, value, observable)` for `entity_type` in `{IPv4-Addr, IPv6-Addr}` only [`src/connector/queries.py:250-260`](../src/connector/queries.py) — "Domain-Name the network context lives on the resolved IPs" and "Autonomous-System seeds already ARE the ASN" [`src/connector/queries.py:210-213`](../src/connector/queries.py).
-- **Third-Party Interactions**: **Whisper Graph API** — a bounded 2-hop query: `(ip)-[ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)-[ROUTES]->(asn:ASN)`, plus `OPTIONAL MATCH` for the ASN's human-readable `HAS_NAME` label and the IP's static-allocation `BELONGS_TO` `PREFIX`, `LIMIT 10` [`src/connector/queries.py:214-247`](../src/connector/queries.py).
+- **Third-Party Interactions**: **Whisper Graph API** — three depth-bounded network-context queries issued sequentially: (1) the 2-hop chain `(ip)-[ANNOUNCED_BY]->(ap:ANNOUNCED_PREFIX)-[ROUTES]->(asn:ASN)`, `LIMIT 10`; (2) one batched `UNWIND` `HAS_NAME` lookup for the collected ASN names; (3) one `BELONGS_TO` `PREFIX` lookup for the seed — each `<= MAX_QUERY_DEPTH (2)`, the `ANONYMOUS` plan cap reported by `CALL whisper.quota()`, so the enrichment works on every Whisper plan (issue #60) [`src/connector/queries.py:220-245, 247-251, 253-262, 265-319`](../src/connector/queries.py).
 - **State Changes**: synthesizes an `Autonomous-System` SCO (`number` + optional `name` from `HAS_NAME`) keyed by Whisper's `nodeId` for idempotent dedup, an `IP → AS` `related-to` edge (`description="ANNOUNCED_BY"`), and one Note (`abstract="Whisper network context"`) collapsing prefix/BGP-flag/threat detail — "there's no clean STIX SCO for a CIDR network" [`src/connector/connector.py:499-506`](../src/connector/connector.py).
 
 **Behaviour details**

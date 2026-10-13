@@ -96,10 +96,9 @@ bundle.
 ## Supplementary network context (issue #48 Phase C)
 
 For every `IPv4-Addr` / `IPv6-Addr` seed the connector also issues a
-**2-hop network-context query** that walks
-`(ip)-[:ANNOUNCED_BY]->(:ANNOUNCED_PREFIX)-[:ROUTES]->(:ASN)`,
-plus optional `HAS_NAME` (for the ASN's human label) and `BELONGS_TO`
-(static prefix). The result is folded into:
+2-hop chain query followed by two 1-hop lookups (`HAS_NAME` for the ASN
+label and `BELONGS_TO` for the static prefix), each within the depth-2
+`ANONYMOUS` cap (issue #60). The result is folded into:
 
 - a real `Autonomous-System` SCO in the bundle (clickable in OpenCTI,
   deduped by the stix2 library's deterministic SCO ID, keyed off the AS

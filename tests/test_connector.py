@@ -885,12 +885,20 @@ def test_threat_context_note_ships_even_when_no_mappable_relationships(
 # --- Network-context Phase C (issue #48) -----------------------------------
 
 
-def _network_context_side_effect(main_rows, network_rows, threat_rows=None):
+def _network_context_side_effect(
+    main_rows,
+    network_rows,
+    threat_rows=None,
+    asn_name_rows=None,
+    static_prefix_rows=None,
+):
     """Dispatch helper for Phase C tests.
 
     - LINKS_TO queries → empty (Phase A is independently tested).
     - threat-context query → ``threat_rows`` or empty.
     - network-context query (matches by "ANNOUNCED_BY" + "ROUTES") → ``network_rows``.
+    - ASN-name query → names derived from ``network_rows``.
+    - static-prefix query → prefixes derived from ``network_rows``.
     - everything else → main template result.
     """
     threat_rows = threat_rows or []
@@ -901,16 +909,45 @@ def _network_context_side_effect(main_rows, network_rows, threat_rows=None):
                 columns=[
                     "seed",
                     "asn",
-                    "asnDescription",
                     "announcedPrefix",
                     "apThreatScore",
                     "apThreatLevel",
                     "isAnycast",
                     "isMoas",
                     "isWithdrawn",
-                    "prefix",
                 ],
                 rows=network_rows,
+                statistics={},
+            )
+        if "HAS_NAME" in query:
+            if asn_name_rows is None:
+                descriptions = {
+                    row["asn"]["name"]: row["asnDescription"]
+                    for row in network_rows
+                    if row["asnDescription"] is not None
+                }
+                rows = [
+                    {"asn": asn, "asnDescription": description}
+                    for asn, description in descriptions.items()
+                ]
+            else:
+                rows = asn_name_rows
+            return CypherResult(
+                columns=["asn", "asnDescription"],
+                rows=rows,
+                statistics={},
+            )
+        if "BELONGS_TO" in query:
+            if static_prefix_rows is None:
+                prefixes = sorted(
+                    {row["prefix"] for row in network_rows if row["prefix"] is not None}
+                )
+                rows = [{"prefix": prefix} for prefix in prefixes]
+            else:
+                rows = static_prefix_rows
+            return CypherResult(
+                columns=["prefix"],
+                rows=rows,
                 statistics={},
             )
         if "FEED_SOURCE" in query and "LISTED_IN" in query:
@@ -1004,6 +1041,142 @@ def test_network_context_emits_as_sco_edge_and_note(connector, helper, client):
     assert "BGP flags: anycast" in content
     assert "ANNOUNCED_PREFIX threat: LOW (score 1)" in content
     assert "Static allocation: 8.8.8.8/32" in content
+
+
+def test_network_context_issues_three_depth_bounded_queries(connector, helper, client):
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+    }
+    client.execute_cypher.side_effect = _network_context_side_effect(
+        main_rows=[_ip_seed_row()],
+        network_rows=[_network_row()],
+    )
+    connector._process_message(_v7_payload(observable))
+
+    queries = [call.args[0] for call in client.execute_cypher.call_args_list]
+    chain_queries = [q for q in queries if "ANNOUNCED_BY" in q and "ROUTES" in q]
+    assert len(chain_queries) == 1
+    assert "HAS_NAME" not in chain_queries[0]
+    assert "BELONGS_TO" not in chain_queries[0]
+    assert "OPTIONAL MATCH" not in chain_queries[0]
+
+    name_queries = [q for q in queries if "HAS_NAME" in q]
+    assert len(name_queries) == 1
+    assert '"AS15169"' in name_queries[0]
+
+    prefix_queries = [q for q in queries if "BELONGS_TO" in q]
+    assert len(prefix_queries) == 1
+    assert '"8.8.8.8"' in prefix_queries[0]
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    as_sco = next(o for o in bundle["objects"] if o["type"] == "autonomous-system")
+    assert as_sco["name"] == "GOOGLE - Google LLC"
+    assert any(
+        o["type"] == "relationship" and o.get("description") == "ANNOUNCED_BY"
+        for o in bundle["objects"]
+    )
+    note = next(
+        o
+        for o in bundle["objects"]
+        if o["type"] == "note" and o.get("abstract") == "Whisper network context"
+    )
+    assert "Static allocation: 8.8.8.8/32" in note["content"]
+
+
+def test_network_context_missing_asn_description_lookup_field_still_enriches(
+    connector, helper, client
+):
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+    }
+    client.execute_cypher.side_effect = _network_context_side_effect(
+        main_rows=[_ip_seed_row()],
+        network_rows=[_network_row()],
+        asn_name_rows=[{"asn": "AS15169"}],
+    )
+
+    result = connector._process_message(_v7_payload(observable))
+
+    assert "Enriched 8.8.8.8" in result
+    helper.send_stix2_bundle.assert_called_once()
+
+
+def test_network_context_missing_static_prefix_lookup_field_still_enriches(
+    connector, helper, client
+):
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+    }
+    client.execute_cypher.side_effect = _network_context_side_effect(
+        main_rows=[_ip_seed_row()],
+        network_rows=[_network_row()],
+        static_prefix_rows=[{}],
+    )
+
+    result = connector._process_message(_v7_payload(observable))
+
+    assert "Enriched 8.8.8.8" in result
+    helper.send_stix2_bundle.assert_called_once()
+
+
+def test_network_context_skips_lookups_when_no_announcer(connector, helper, client):
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "8.8.8.8",
+    }
+    client.execute_cypher.side_effect = _network_context_side_effect(
+        main_rows=[_ip_seed_row()],
+        network_rows=[],
+    )
+    connector._process_message(_v7_payload(observable))
+
+    queries = [call.args[0] for call in client.execute_cypher.call_args_list]
+    assert not any("HAS_NAME" in query for query in queries)
+    assert not any("BELONGS_TO" in query for query in queries)
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    assert not any(o["type"] == "autonomous-system" for o in bundle["objects"])
+
+
+def test_network_context_moas_batches_asn_names_in_one_query(connector, helper, client):
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "1.2.3.4",
+    }
+    client.execute_cypher.side_effect = _network_context_side_effect(
+        main_rows=[_ip_seed_row(value="1.2.3.4")],
+        network_rows=[
+            _network_row(
+                seed_name="1.2.3.4",
+                asn_id="asn-a",
+                asn_name="AS100",
+                asn_desc="ASN A Inc",
+            ),
+            _network_row(
+                seed_name="1.2.3.4",
+                asn_id="asn-b",
+                asn_name="AS200",
+                asn_desc="ASN B Corp",
+            ),
+        ],
+    )
+    connector._process_message(_v7_payload(observable))
+
+    name_queries = [
+        call.args[0]
+        for call in client.execute_cypher.call_args_list
+        if "HAS_NAME" in call.args[0]
+    ]
+    assert len(name_queries) == 1
+    assert '"AS100"' in name_queries[0]
+    assert '"AS200"' in name_queries[0]
 
 
 def test_network_context_falls_back_to_as_number_label_without_has_name(
