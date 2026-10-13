@@ -1,6 +1,6 @@
 [project]
 name = "whisper-opencti"
-version = "1.0.1"
+version = "1.1.0"
 description = "OpenCTI connector that enriches indicators with Whisper graph data."
 readme = "README.md"
 requires-python = ">=3.11"
