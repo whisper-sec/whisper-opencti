@@ -348,7 +348,7 @@ For each enrichment request the connector:
    allocation PREFIX).
 8. Runs the canonical [whisper.security catalog](https://github.com/whisper-sec/whisper-catalog)
    procedures (`whisper.identify`, `whisper.assess`, `whisper.explain`) and
-   folds their authoritative signals into a single assessment Note (see
+   folds their signals into a single assessment Note (see
    [Graph enrichment via the whisper.security catalog](#graph-enrichment-via-the-whispersecurity-catalog)).
 9. Assembles a single STIX 2.1 bundle - led by the `Whisper` author
    `Identity` that every other object references - with the SCOs, SDOs,

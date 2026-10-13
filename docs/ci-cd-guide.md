@@ -219,7 +219,7 @@ PYTHONPATH=. pylint ../../../src ../../../tests \
 
 **Tool**: pytest
 
-**Test Count**: 200 cases (`.venv-sdk/bin/python -m pytest --collect-only -q`, checked 2026-07-18 - see `docs/TESTING.md`'s Test Pyramid)
+**Test Count**: 235 cases (`.venv-sdk/bin/python -m pytest --collect-only -q`, checked 2026-07-18 - see `docs/TESTING.md`'s Test Pyramid)
 
 **Test Files**:
 - `tests/test_connector.py` - End-to-end connector behavior
@@ -468,7 +468,7 @@ make qa-clean        # Stop + wipe
 ### Running Tests
 
 ```bash
-make test                              # Run all 200 tests
+make test                              # Run all 235 tests
 pytest                                 # Same
 pytest tests/test_connector.py          # Single file
 pytest tests/test_connector.py::test_name  # Single test

@@ -39,6 +39,10 @@ recorded there.
 Use these indicators for repeatable runs. They're stable enough across days
 that the expected outcomes shouldn't shift wildly week-to-week.
 
+Every row below additionally gets a `Whisper graph catalog assessment` Note
+when the whisper.security catalog has an operator identity, a threat posture or
+a score for the seed (`whisper.identify` / `whisper.assess` / `whisper.explain`).
+
 | Entity type | Value | Expected outcome |
 | --- | --- | --- |
 | `IPv4-Addr` | `8.8.8.8` | `Location` (Country US + City Mountain View, US), `Autonomous-System` SCO (AS15169, `description="ANNOUNCED_BY"`), `Whisper network context` Note (announced prefix, BGP flags, ANNOUNCED_PREFIX threat), and a `Whisper threat intelligence` Note when Whisper has threat data on the seed. |

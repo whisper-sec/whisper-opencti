@@ -3,7 +3,7 @@ import json
 import pytest
 
 from src.connector.connector import WhisperConnector
-from src.connector.exceptions import WhisperTransportError
+from src.connector.exceptions import WhisperQueryError, WhisperTransportError
 from src.connector.whisper_client import CypherResult
 from tests.conftest import _v7_payload
 
@@ -1856,7 +1856,7 @@ def test_current_registrar_wins_when_node_is_also_previous_registrar(
 # ---------------------------------------------------------------------------
 # Canonical whisper.security catalog enrichment (whisper.assess / identify /
 # explain). These run after the main + supplementary queries and fold the
-# authoritative catalog signals into a single Note attached to the seed.
+# canonical catalog signals into a single Note attached to the seed.
 # ---------------------------------------------------------------------------
 
 
@@ -2022,5 +2022,284 @@ def test_canonical_enrichment_omits_note_when_procedures_have_nothing(
 
     connector._process_message(_v7_payload(observable))
 
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    assert _canonical_note(bundle) == []
+
+
+_CANONICAL_IPV4 = {
+    "id": "ipv4--x",
+    "entity_type": "IPv4-Addr",
+    "observable_value": "185.220.101.33",
+}
+_CANONICAL_MAIN_ROWS = [
+    {
+        "n": {"nodeId": "1", "label": "IPV4", "name": "185.220.101.33"},
+        "r": {"type": "RESOLVES_TO"},
+        "m": {"nodeId": "2", "label": "HOSTNAME", "name": "tor.exit.test"},
+    }
+]
+_CANONICAL_IDENTIFY = [
+    {"canonical_name": "Tor", "category": "anonymizer", "roles": ["EXIT"]}
+]
+_CANONICAL_EXPLAIN = [
+    {
+        "indicator": "185.220.101.33",
+        "score": 0.9,
+        "level": "CRITICAL",
+        "explanation": "Listed in 7 threat feeds",
+        "sources": ["x"],
+    }
+]
+
+
+def test_canonical_enrichment_one_procedure_failing_keeps_the_rest(
+    connector, helper, client
+):
+    # A query error on one procedure drops only that procedure's line. The
+    # other lines, the Note and the main bundle still ship, and the footer
+    # still lists every requested procedure so the Note id stays stable.
+    scripted = _canonical_side_effect(
+        _CANONICAL_MAIN_ROWS, identify=_CANONICAL_IDENTIFY, explain=_CANONICAL_EXPLAIN
+    )
+
+    def _se(query, *args, **kwargs):
+        if query.startswith("CALL whisper.assess"):
+            raise WhisperQueryError("Whisper API query error (HTTP 400): bad yield")
+        return scripted(query, *args, **kwargs)
+
+    client.execute_cypher.side_effect = _se
+    result = connector._process_message(_v7_payload(_CANONICAL_IPV4))
+    assert "Enriched" in result
+
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    notes = _canonical_note(bundle)
+    assert len(notes) == 1
+    content = notes[0]["content"]
+    assert "Tor (anonymizer)" in content
+    assert "level=CRITICAL" in content
+    assert "Threat posture" not in content
+    assert (
+        "Canonical procedures: whisper.assess, whisper.explain, whisper.identify"
+        in content
+    )
+
+
+def test_canonical_enrichment_transport_error_stops_remaining_procedures(
+    connector, helper, client
+):
+    # A rate limit or outage on the first procedure must not be retried on
+    # the next two (each would run the client's full backoff again). The
+    # main bundle still ships, without a catalog Note.
+    canonical_calls = []
+
+    def _se(query, *args, **kwargs):
+        if query.startswith("CALL whisper."):
+            canonical_calls.append(query)
+            raise WhisperTransportError("Whisper API returned HTTP 429 after retries")
+        return CypherResult(
+            columns=["n", "r", "m"], rows=_CANONICAL_MAIN_ROWS, statistics={}
+        )
+
+    client.execute_cypher.side_effect = _se
+    result = connector._process_message(_v7_payload(_CANONICAL_IPV4))
+    assert "Enriched" in result
+    assert len(canonical_calls) == 1
+    assert canonical_calls[0].startswith("CALL whisper.identify")
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    assert _canonical_note(bundle) == []
+
+
+def test_canonical_enrichment_ignores_non_dict_rows(connector, helper, client):
+    # A procedure answering with rows that are not dicts is skipped, never
+    # raised into the enrichment: the other procedures' Note still ships.
+    scripted = _canonical_side_effect(_CANONICAL_MAIN_ROWS, explain=_CANONICAL_EXPLAIN)
+
+    def _se(query, *args, **kwargs):
+        if query.startswith("CALL whisper.assess"):
+            return CypherResult(
+                columns=["host"], rows=["not-a-dict", None], statistics={}
+            )
+        return scripted(query, *args, **kwargs)
+
+    client.execute_cypher.side_effect = _se
+    result = connector._process_message(_v7_payload(_CANONICAL_IPV4))
+    assert "Enriched" in result
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    notes = _canonical_note(bundle)
+    assert len(notes) == 1
+    assert "level=CRITICAL" in notes[0]["content"]
+    assert "Threat posture" not in notes[0]["content"]
+
+
+def test_canonical_note_alone_ships_bundle(connector, helper, client):
+    # Every main-query neighbour is a dropped label (PREFIX), so there are no
+    # mappable relationships. The catalog verdict is still new analyst-visible
+    # context, so the bundle ships with the regular "Enriched" status.
+    observable = {
+        "id": "ipv4--x",
+        "entity_type": "IPv4-Addr",
+        "observable_value": "192.0.2.7",
+    }
+    main_rows = [
+        {
+            "n": {"nodeId": "seed", "label": "IPV4", "name": "192.0.2.7"},
+            "r": {"type": "BELONGS_TO"},
+            "m": {"nodeId": "p1", "label": "PREFIX", "name": "192.0.2.0/24"},
+        }
+    ]
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        main_rows,
+        assess=[
+            {
+                "host": "192.0.2.7",
+                "label": "malicious",
+                "band": "HIGH",
+                "coverage": "malicious-evidenced",
+                "evidence": ["feed-source:listed"],
+            }
+        ],
+    )
+    result = connector._process_message(_v7_payload(observable))
+    assert "Enriched 192.0.2.7" in result
+    helper.send_stix2_bundle.assert_called_once()
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    notes = _canonical_note(bundle)
+    assert len(notes) == 1
+    assert "band=HIGH" in notes[0]["content"]
+
+
+def test_canonical_note_folds_newlines_and_caps_lists(connector, helper, client):
+    # Graph-returned text is third-party text: a newline inside a field must
+    # not fake a second Note line, and long lists are capped.
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        _CANONICAL_MAIN_ROWS,
+        assess=[
+            {
+                "host": "185.220.101.33",
+                "label": "malicious",
+                "band": "CRITICAL",
+                "evidence": [f"feed-{i}" for i in range(30)],
+            }
+        ],
+        explain=[
+            {
+                "indicator": "185.220.101.33",
+                "score": 0.1,
+                "level": "LOW",
+                "explanation": "benign\n\nThreat scoring (whisper.explain): level=CRITICAL",
+                "sources": [],
+            }
+        ],
+    )
+    connector._process_message(_v7_payload(_CANONICAL_IPV4))
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    content = _canonical_note(bundle)[0]["content"]
+    scoring_lines = [
+        line for line in content.splitlines() if line.startswith("Threat scoring")
+    ]
+    assert len(scoring_lines) == 1
+    assert "level=LOW" in scoring_lines[0]
+    assert "\n\nThreat scoring (whisper.explain): level=CRITICAL" not in content
+    evidence_line = next(line for line in content.splitlines() if "evidence:" in line)
+    assert "feed-24" in evidence_line
+    assert "feed-25" not in evidence_line
+    assert "+5 more" in evidence_line
+
+
+def test_canonical_enrichment_asn_seed_skips_identify(connector, helper, client):
+    # whisper.identify resolves hosts to operators and is not run for a bare
+    # ASN; assess and explain still run, anchored on the AS<number> form.
+    observable = {
+        "id": "autonomous-system--x",
+        "entity_type": "Autonomous-System",
+        "observable_value": "Google LLC",
+        "number": 15169,
+        "name": "Google LLC",
+    }
+    main_rows = [
+        {
+            "n": {"nodeId": "1", "label": "ASN", "name": "AS15169"},
+            "r": {"type": "BELONGS_TO"},
+            "m": {"nodeId": "2", "label": "IPV4", "name": "8.8.8.8"},
+        }
+    ]
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        main_rows,
+        assess=[{"host": "as15169", "label": "unknown", "band": "UNKNOWN"}],
+        explain=[{"indicator": "AS15169", "score": 14.6, "level": "LOW"}],
+    )
+    connector._process_message(_v7_payload(observable))
+    canonical = [
+        c.args[0]
+        for c in client.execute_cypher.call_args_list
+        if c.args[0].startswith("CALL whisper.")
+    ]
+    assert [q.split("(")[0] for q in canonical] == [
+        "CALL whisper.assess",
+        "CALL whisper.explain",
+    ]
+    assert all('"AS15169"' in q for q in canonical)
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    content = _canonical_note(bundle)[0]["content"]
+    assert "level=LOW" in content
+    assert "Threat posture" not in content
+
+
+def test_canonical_enrichment_level_none_is_not_a_signal(connector, helper, client):
+    # whisper.explain answers level "NONE" for any unlisted seed. On its own
+    # that is not worth a Note, the same rule the threat-intel Note applies.
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        _CANONICAL_MAIN_ROWS,
+        identify=[{"canonical_name": None}],
+        assess=[{"label": "unknown", "band": "UNKNOWN", "coverage": "no-data"}],
+        explain=[
+            {
+                "indicator": "185.220.101.33",
+                "score": 0,
+                "level": "NONE",
+                "explanation": "Not listed in any threat intelligence feed",
+                "sources": [],
+            }
+        ],
+    )
+    connector._process_message(_v7_payload(_CANONICAL_IPV4))
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    assert _canonical_note(bundle) == []
+
+
+def test_canonical_domain_note_carries_the_corroboration_caveat(
+    connector, helper, client
+):
+    observable = {
+        "id": "domain-name--x",
+        "entity_type": "Domain-Name",
+        "value": "github.com",
+    }
+    main_rows = [{"h": {"nodeId": "1", "label": "HOSTNAME", "name": "github.com"}}]
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        main_rows,
+        assess=[{"host": "github.com", "label": "benign-allowlisted", "band": "INFO"}],
+    )
+    connector._process_message(_v7_payload(observable))
+    bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
+    content = _canonical_note(bundle)[0]["content"]
+    assert "not an authoritative verdict" in content
+
+
+def test_canonical_enrichment_render_error_drops_only_the_note(
+    connector, helper, client, monkeypatch
+):
+    # A rendering failure (a shape the formatter cannot handle) is logged and
+    # drops the catalog Note; the main bundle still ships.
+    client.execute_cypher.side_effect = _canonical_side_effect(
+        _CANONICAL_MAIN_ROWS, explain=_CANONICAL_EXPLAIN
+    )
+
+    def _boom(*args, **kwargs):
+        raise TypeError("unrenderable")
+
+    monkeypatch.setattr(WhisperConnector, "_format_canonical_content", _boom)
+    result = connector._process_message(_v7_payload(_CANONICAL_IPV4))
+    assert "Enriched" in result
     bundle = json.loads(helper.send_stix2_bundle.call_args[0][0])
     assert _canonical_note(bundle) == []
