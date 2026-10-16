@@ -42,9 +42,9 @@ This guide explains the whisper-opencti CI/CD architecture, how to work with it 
 ---
 
 ## Overview
-<!-- source: .github/workflows/*.yml (7 files), verified: read all 7 workflow files in full, date: 2026-07-18 -->
+<!-- source: .github/workflows/*.yml (7 files), verified: read all 7 workflow files in full (2026-07-18); re-read ci-tests-connectors.yml in full after its change, date: 2026-10-16 -->
 
-The whisper-opencti repository uses **GitHub Actions** for continuous integration and delivery, across **7 workflows**. Several of them deliberately replicate checks from upstream `OpenCTI-Platform/connectors` (tracked under issue #89) — this repo is the standalone development home of a connector that gets ported upstream to `internal-enrichment/whisper/`, so CI here is built to catch anything that would fail upstream's own CI before that port happens. Do not "modernize" or diverge this toolchain from upstream without a deliberate decision. See [Pipeline Map](#pipeline-map) for the full list of workflows.
+The whisper-opencti repository uses **GitHub Actions** for continuous integration and delivery, across **7 workflows**. Several of them deliberately replicate checks from upstream `OpenCTI-Platform/connectors` (tracked under issue #89) — this repo is the standalone development home of a connector that gets ported upstream to `internal-enrichment/whisper/`, so CI here is built to catch anything that would fail upstream's own CI before that port happens. Do not "modernize" or diverge this toolchain from upstream without a deliberate decision — for example, since issue #108 the Tests Connectors job reinstalls `pycti` from OpenCTI master only on its daily schedule and on manual runs, not on pushes or pull requests (see [Tests Connectors](#tests-connectors-upstream-parity)). See [Pipeline Map](#pipeline-map) for the full list of workflows.
 
 ### Key Components
 
@@ -70,13 +70,13 @@ The whisper-opencti repository uses **GitHub Actions** for continuous integratio
 ---
 
 ## Pipeline Map
-<!-- source: .github/workflows/{ci,ci-connector-verified-linter,ci-tests-connectors,ci-unused-deps,gh-do-not-merge-label,gh-pr-check-conventions,release}.yml, verified: read each file in full, date: 2026-07-18 -->
+<!-- source: .github/workflows/{ci,ci-connector-verified-linter,ci-tests-connectors,ci-unused-deps,gh-do-not-merge-label,gh-pr-check-conventions,release}.yml, verified: read each file in full (2026-07-18); re-read ci-tests-connectors.yml in full after its change, date: 2026-10-16 -->
 
 | Workflow | File / location | Trigger | What it does |
 |---|---|---|---|
 | CI | `.github/workflows/ci.yml` | push to `main`/`develop`; PR to `main`/`develop` | 5 jobs: `format` (isort + black check) → `flake8` (`--ignore=E,W`) → `stix_id_linter` (pylint + vendored `no_generated_id_stix` plugin) → `test` (pytest) → `build` (docker buildx, validation only, no push) |
 | Connector Verified Linter | `.github/workflows/ci-connector-verified-linter.yml` | `pull_request` (any); push to `main`/`develop` | Stages the repo into a synthetic `internal-enrichment/whisper/` monorepo layout, runs upstream's `connector-linter` tool (installed via pip from `OpenCTI-Platform/connectors`), fails on any `::error` annotation not covered by `.github/vclint-allowlist.txt` |
-| Tests Connectors | `.github/workflows/ci-tests-connectors.yml` | push to `main`/`develop`; `pull_request`; daily cron `0 6 * * *` (UTC); `workflow_dispatch` | Replicates upstream's `run_test.sh`: isolated `uv` venv, installs `tests/test-requirements.txt`, force-installs `pycti` from `OpenCTI-Platform/opencti@master`, runs `uv pip check` (pycti/connectors-sdk drift gate), then pytest with coverage. The daily cron catches upstream pycti-pin drift even without a push here. |
+| Tests Connectors | `.github/workflows/ci-tests-connectors.yml` | push to `main`/`develop`; `pull_request`; daily cron `0 6 * * *` (UTC); `workflow_dispatch` | Replicates upstream's `run_test.sh`: isolated `uv` venv, installs `tests/test-requirements.txt` (the `pycti` and `connectors-sdk` pins we ship), runs `uv pip check`, then pytest with coverage. **Push and PR runs test those pins.** Only the daily cron and `workflow_dispatch` runs first force-install `pycti` from `OpenCTI-Platform/opencti@master`, so `uv pip check` there is the drift gate: it goes red when OpenCTI has released a `pycti` newer than the pinned `connectors-sdk` commit declares, even without a push here. |
 | Unused Dependencies (warning) | `.github/workflows/ci-unused-deps.yml` | push to `main`/`develop`; PR to `main`/`develop` | Runs `deptry` against `src/` vs `src/requirements.txt`; posts findings to the job summary as warnings. **Never fails the build** (warning-only, matches upstream) |
 | Do Not Merge label check | `.github/workflows/gh-do-not-merge-label.yml` | PR `opened`/`reopened`/`labeled`/`unlabeled`/`synchronize` | Fails if the PR carries a `do not merge` label |
 | PR conventions checks | `.github/workflows/gh-pr-check-conventions.yml` | PR `opened`/`edited`/`reopened`/`ready_for_review`/`synchronize` | 3 jobs: `check-signed-commits` (blocking), `check-pr-issue` (advisory here, `continue-on-error: true`), `check-pr-title-convention` (blocking, skipped for `renovate[bot]`) |
@@ -298,22 +298,27 @@ docker build --no-cache -t whisper-opencti:test .  # Fresh build
 ---
 
 ## Tests Connectors (Upstream Parity)
-<!-- source: .github/workflows/ci-tests-connectors.yml, verified: read file in full, date: 2026-07-18 -->
+<!-- source: .github/workflows/ci-tests-connectors.yml, verified: read file in full; parsed the YAML; evaluated the reinstall step's `if:` for each trigger, date: 2026-10-16 -->
 
 **Mirrors**: upstream `OpenCTI-Platform/connectors` `.github/workflows/ci-tests-connectors.yml` ("Tests Connectors") together with the `run_test.sh` pipeline it invokes — inlined here as named steps since this repo has exactly one connector (no changed-connector detection matrix).
 
-**What it does** (job `test`, `RELEASE_REF=master`):
+**What it does** (job `test`; `RELEASE_REF=master` is read only by step 3):
 
 1. `uv venv -p 3.12 .temp_venv` — an isolated virtual environment, separate from the plain-pip `test` job in `ci.yml` (which uses Python 3.11).
-2. `uv pip install -r tests/test-requirements.txt`.
-3. Uninstalls the pinned `pycti` and force-installs the latest from `OpenCTI-Platform/opencti@master` (`client-python` subdirectory) — the upstream-parity point: this job tests against tomorrow's `pycti`, not today's pin.
-4. `uv pip check` — fails if the freshly installed `pycti` no longer satisfies `connectors-sdk`'s exact pin. This is the drift gate.
+2. `uv pip install -r tests/test-requirements.txt` — installs the `pycti` and `connectors-sdk` pins from `src/requirements.txt`.
+3. **Schedule and `workflow_dispatch` runs only**: uninstalls the pinned `pycti` and force-installs the latest from `OpenCTI-Platform/opencti@master` (`client-python` subdirectory) — the upstream-parity point: this check tests against tomorrow's `pycti`, not today's pin. On push and PR runs the step is skipped (it shows as skipped in the run), so those runs test the pins we ship.
+4. `uv pip check` — runs on every trigger. On push and PR runs it confirms that the shipped pins are consistent with each other. On a schedule or `workflow_dispatch` run it fails if the freshly installed `pycti` no longer satisfies `connectors-sdk`'s exact pin. That failure is the drift gate.
 5. `python -m pytest tests --cov --cov-append --cov-report=xml --junitxml=test_outputs/tests/junit.xml -q -rA`.
-6. On failure only: a diagnostic step prints the local `src/requirements.txt` pycti pin next to the current `connectors-sdk@master` pin.
+6. On failure only: a diagnostic step says which mode ran (pins only, or drift check) and prints the local `src/requirements.txt` `pycti` and `connectors-sdk` pins next to the current `connectors-sdk@master` pin.
 
-**Also runs on a daily cron** (`0 6 * * *` UTC) and `workflow_dispatch`, in addition to push/PR — this repo's own addition, not upstream's: it catches `connectors-sdk@master` bumping its `pycti` pin (which would break `uv pip check` here) even on days nobody pushes to this repo. Codecov upload steps present upstream are dropped here (no `CODECOV_TOKEN` in this repo).
+**Why push and PR runs do not reinstall `pycti` from master** (a deliberate divergence from upstream, issue #108): upstream's `run_test.sh` swaps in the `connectors-sdk` from its own checkout before it reinstalls `pycti` from master. This repo instead pins `connectors-sdk` to a commit, and `pycti` to the exact version that commit declares, in `src/requirements.txt`. On a push or PR the reinstall therefore only reported OpenCTI's release cadence: an upstream `pycti` release turned every PR and push red until a lockstep bump landed (#96, #104, #107). Push and PR runs now test the pins we ship; the daily cron and manual runs keep checking against master.
 
-**If it fails** (`uv pip check` step): read the "Diagnose pycti pin drift" step's output for the current `connectors-sdk@master` pin, bump `pycti` in `src/requirements.txt` to match, then update `.env.example` (`OPENCTI_VERSION`) and `__metadata__/connector_manifest.json` (`support_version`) in lockstep — see [Version Management](#version-management).
+**Schedule and manual runs**: the daily cron (`0 6 * * *` UTC; GitHub may start it late at busy times) and `workflow_dispatch` are this repo's own addition, not upstream's. They are the drift check: the run goes red on the first cron after an OpenCTI release that the pinned `connectors-sdk` commit does not declare yet, even on days nobody pushes to this repo. After a lockstep bump, run `gh workflow run "Tests Connectors" --ref develop` to see the check go green without waiting for the next cron. The concurrency group includes the event name, so a push to `develop` cannot cancel a scheduled run. Codecov upload steps present upstream are dropped here (no `CODECOV_TOKEN` in this repo).
+
+**If it fails**:
+
+- **Schedule or `workflow_dispatch` run** (`uv pip check` step): read the "Diagnose pycti pin drift" step's output for the current `connectors-sdk@master` pin, bump `pycti` and the `connectors-sdk` commit in `src/requirements.txt` together, then update `.env.example` (`OPENCTI_VERSION`) and `__metadata__/connector_manifest.json` (`support_version`) in lockstep — see [Version Management](#version-management). If the master pin equals ours, `connectors-sdk` has not caught up with OpenCTI master yet and there is nothing to bump.
+- **Push or PR run**: upstream drift is not in play, because the run installed only the pins. Treat it as a real failure of the change: a failing test, or `pycti` and the `connectors-sdk` commit in `src/requirements.txt` disagreeing (a half-done lockstep bump, which fails at "Install requirements" because `uv` cannot resolve the two pins together).
 
 ---
 
@@ -589,7 +594,7 @@ HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
 ---
 
 ## Version Management
-<!-- source: src/requirements.txt, .env.example, __metadata__/connector_manifest.json, README.md (Installation → Requirements), verified: read all four files, date: 2026-07-18 -->
+<!-- source: src/requirements.txt, .env.example, __metadata__/connector_manifest.json, README.md (Installation → Requirements), .github/workflows/ci-tests-connectors.yml, verified: read src/requirements.txt, the workflow, .env.example and the manifest; fetched connectors-sdk/pyproject.toml at master and at the pinned commit (README not re-read), date: 2026-10-16 -->
 
 ### The Critical Rule
 
@@ -597,45 +602,58 @@ HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
 
 Why?
 - connectors-sdk pins `pycti==X` in its pyproject.toml
+- `src/requirements.txt` pins connectors-sdk to a commit (not `@master`) and pycti to the version that commit declares, so what ships changes only when both lines are bumped together
 - Mismatch → pip resolver conflict → Docker build failure
 
 ### How to Check Compatibility
 
 ```bash
-# Check what connectors-sdk requires
+# Check what connectors-sdk master requires (the pycti a bump would move to)
 curl https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connectors-sdk/pyproject.toml \
-  | grep '"pycti'
-# Output (checked 2026-07-18): "pycti==7.260715.0"
+  | grep '"pycti=='
+# Output (checked 2026-10-16): "pycti==7.261014.0",
 
 # Check local requirement
-grep pycti src/requirements.txt
-# Output: pycti==7.260715.0
+grep '^pycti' src/requirements.txt
+# Output: pycti==7.261014.0
 
-# In sync as of 2026-07-18 (bumped after upstream's 7.260715.0 release broke
-# resolution repo-wide for three days). Upstream cuts date-versioned releases
-# roughly weekly and each one moves the sdk's pycti pin, so this drift WILL
-# recur: it is the exact thing `uv pip check` in ci-tests-connectors.yml's
-# daily cron watches for. When it fires, bump src/requirements.txt (and
-# .env.example / the manifest's support_version in lockstep, below).
+# In sync as of 2026-10-16 (after the lockstep bump to 7.261014.0). Upstream cuts
+# date-versioned releases and each one moves the sdk's pycti pin, so this drift
+# WILL recur. Push and PR runs of ci-tests-connectors.yml test the pins and stay
+# green meanwhile; its daily cron (and a manual run) reinstalls pycti from
+# OpenCTI master and goes red until src/requirements.txt (and .env.example /
+# the manifest's support_version in lockstep, below) is bumped.
 ```
+
+### How CI Watches for Drift
+
+`src/requirements.txt` pins `connectors-sdk` to a commit and `pycti` to the exact version that commit declares, so what ships changes only through a lockstep bump. The `Tests Connectors` workflow ([details](#tests-connectors-upstream-parity)) treats its two kinds of run differently:
+
+| Trigger | `pycti` under test | A red run means |
+|---|---|---|
+| `pull_request`, push to `main`/`develop` | the pin in `src/requirements.txt` (what ships) | A defect in the change itself: failing tests, or `pycti` and the `connectors-sdk` commit disagreeing (a half-done bump). Not upstream drift. |
+| daily cron (`0 6 * * *` UTC), `workflow_dispatch` | the latest `pycti` from `OpenCTI-Platform/opencti@master`, reinstalled over the pin | OpenCTI has released a `pycti` newer than the pinned `connectors-sdk` commit declares: do the lockstep bump below. |
+
+So a PR is not red only because OpenCTI released a new `pycti`; the drift shows up as a red scheduled run on the first daily run after the release. `uv pip check` runs in both modes: against the pinned set on push and PR, against the `pycti` from master on the schedule. See [Tests Connectors: `uv pip check` Fails](#tests-connectors-uv-pip-check-fails) for who is notified.
 
 ### Updating pycti
 
 If connectors-sdk updates pycti, update these files together:
 
-1. **src/requirements.txt** - Exact pin
+1. **src/requirements.txt** - Exact pin, together with the `connectors-sdk` commit that declares it
    ```
-   pycti==7.260701.0
+   pycti==<pycti version>
+   connectors-sdk @ git+https://github.com/OpenCTI-Platform/connectors.git@<commit that declares that pycti>#subdirectory=connectors-sdk
    ```
 
 2. **.env.example** - Platform version
    ```
-   OPENCTI_VERSION=7.260701.0
+   OPENCTI_VERSION=<pycti version>
    ```
 
 3. **__metadata__/connector_manifest.json** - Support version
    ```json
-   "support_version": ">=7.260701.0"
+   "support_version": ">=<pycti version>"
    ```
 
 All three must be in sync for consistency.
@@ -774,18 +792,23 @@ Fix the underlying issue, or — if it's an intentional, already-understood devi
 
 ### Tests Connectors: `uv pip check` Fails
 
-**Error**: `uv pip check` reports a dependency conflict after the job force-installs `pycti` from `OpenCTI-Platform/opencti@master`
+**Error**: `uv pip check` reports a dependency conflict after the job force-installs `pycti` from `OpenCTI-Platform/opencti@master` (schedule and `workflow_dispatch` runs only)
 
-**Cause**: `connectors-sdk@master` bumped its exact `pycti` pin, and the `src/requirements.txt` pin is now behind it. Can surface on the daily `0 6 * * *` cron run even without a push.
+**Cause**: OpenCTI released a `pycti` newer than the exact pin declared by the `connectors-sdk` commit in `src/requirements.txt`. The job reinstalls `pycti` from master only on the daily `0 6 * * *` cron run and on `workflow_dispatch`, so this surfaces there, even without a push. Push and PR runs install only the pins, so for them this is not upstream drift: a red push or PR run is a real failure of the change (a failing test, or `pycti` and the `connectors-sdk` commit disagreeing because a lockstep bump was only half done; that one fails earlier, at "Install requirements", where `uv` cannot resolve the two pins together).
 
 **Fix**:
 ```bash
 # Same comparison the job's failure-only diagnostic step runs:
-grep pycti src/requirements.txt
+grep -E '^(pycti|connectors-sdk)' src/requirements.txt
 curl -fsSL https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connectors-sdk/pyproject.toml | grep pycti
-# Bump src/requirements.txt to match, then update .env.example (OPENCTI_VERSION)
-# and __metadata__/connector_manifest.json (support_version) in lockstep.
+# Bump pycti and the connectors-sdk commit in src/requirements.txt together, then
+# update .env.example (OPENCTI_VERSION) and __metadata__/connector_manifest.json
+# (support_version) in lockstep.
+# After the bump merges, confirm without waiting for the cron:
+gh workflow run "Tests Connectors" --ref develop
 ```
+
+**Who sees a red scheduled run**: GitHub sends the failure notification of a scheduled run to the user who last changed the `cron` line in the workflow file; anyone else finds the run under Actions and on the latest `develop` commit. In a public repository GitHub also turns scheduled workflows off after 60 days without repository activity; if the daily runs stop appearing, re-enable the workflow under Actions → Tests Connectors.
 
 ---
 
@@ -887,13 +910,13 @@ git push origin v1.0.0-rc1
 ---
 
 ## Key Files
-<!-- source: .github/workflows/, repo root listing, verified: read each workflow file + ls repo root, date: 2026-07-18 -->
+<!-- source: .github/workflows/, repo root listing, verified: read each workflow file + ls repo root (2026-07-18); re-read ci-tests-connectors.yml after its change, date: 2026-10-16 -->
 
 | File | Purpose |
 |------|---------|
 | `.github/workflows/ci.yml` | CI pipeline definition (format, flake8, STIX-ID lint, tests, docker build) |
 | `.github/workflows/ci-connector-verified-linter.yml` | Upstream Verified-Linter parity check (`connector-linter`) |
-| `.github/workflows/ci-tests-connectors.yml` | Upstream Tests-Connectors parity check + daily pycti-drift cron |
+| `.github/workflows/ci-tests-connectors.yml` | Upstream Tests-Connectors parity check: pinned versions on push/PR, `pycti`-master drift check on the daily cron and manual runs |
 | `.github/workflows/ci-unused-deps.yml` | `deptry` unused-dependency check (warning-only) |
 | `.github/workflows/gh-do-not-merge-label.yml` | Blocks merge while a "do not merge" label is present |
 | `.github/workflows/gh-pr-check-conventions.yml` | Signed-commit, linked-issue (advisory), PR-title convention checks |
