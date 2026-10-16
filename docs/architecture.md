@@ -362,7 +362,7 @@ The package is a shallow layered pipeline; imports flow one direction only. The 
 - **Config is frozen and centralized.** All config comes through `ConnectorSettings` (connectors-sdk `BaseConnectorSettings`); the API key is a `SecretStr` never logged. Modules receive config by injection, not by reading env directly (except `main.py`'s startup-retry budget env reads).
 
 ## External Dependencies
-<!-- source: import grep across src/, whisper_client.py, settings.py, .env.example, docker-compose.base.yml; verified: read; date: 2026-07-18 -->
+<!-- source: import grep across src/, whisper_client.py, settings.py, .env.example, docker-compose.base.yml, src/requirements.txt, .github/workflows/ci-tests-connectors.yml; verified: read; connectors-sdk note re-checked against src/requirements.txt and the workflow; date: 2026-10-16 -->
 
 The integration surface is small and, by the boundary rules above, centralized. "Send →" / "recv ←" describe data crossing each boundary. Auth is given as env-var **names** only, never values.
 
@@ -375,7 +375,7 @@ The integration surface is small and, by the boundary rules above, centralized. 
 
 Notes:
 - The connector calls exactly **one** external HTTP API at runtime (Whisper). OpenCTI is the host platform, reached only through `pycti`/`connectors-sdk`, never by direct HTTP from this code. There are no analytics, storage, payments, email, or CMS integrations.
-- `connectors-sdk` is installed from a git requirement (`git+https://github.com/OpenCTI-Platform/connectors.git@master#subdirectory=connectors-sdk`), not PyPI, and pins the exact `pycti` version — see the pin-drift guard in `ci-tests-connectors.yml`.
+- `connectors-sdk` is installed from a git requirement pinned to a commit (`git+https://github.com/OpenCTI-Platform/connectors.git@<commit>#subdirectory=connectors-sdk`, see `src/requirements.txt`), not PyPI and not `@master`; that commit pins the exact `pycti` version, so the two lines are bumped together. The daily scheduled run of `ci-tests-connectors.yml` is the drift check: it reinstalls `pycti` from OpenCTI master and goes red once a newer release is not yet matched by the pinned commit.
 
 ## Generated Artifacts (never hand-edit)
 <!-- source: tools/gen_iana_registrars.py, iana_registrars.py header, Dockerfile, .env.example, config.yml.sample, .github/workflows/release.yml; verified: read; date: 2026-07-18 -->

@@ -13,7 +13,7 @@
 # Testing
 
 ## Test Pyramid
-<!-- source: pyproject.toml [tool.pytest.ini_options], tests/*.py, docs/qa-handoff.md, docs/scenarios/; verified: read config, ran `pytest -q` and `pytest --collect-only -q` in .venv-sdk; date: 2026-07-18 -->
+<!-- source: pyproject.toml [tool.pytest.ini_options], tests/*.py, docs/qa-handoff.md, docs/scenarios/, .github/workflows/ci-tests-connectors.yml; verified: read config, ran `pytest -q` and `pytest --collect-only -q` in .venv-sdk (235 tests, 2026-10-13), re-read the workflow for the CI paragraph; date: 2026-10-16 -->
 
 whisper-opencti has exactly one automated layer, unit, plus a manual, human-run acceptance layer. There is no automated integration or e2e suite.
 
@@ -25,7 +25,7 @@ whisper-opencti has exactly one automated layer, unit, plus a manual, human-run 
 
 Running the suite locally (`.venv-sdk/bin/python -m pytest -q`, checked 2026-10-13) collects and passes **235 tests**. [architecture.md](architecture.md) §7 and [ci-cd-guide.md](ci-cd-guide.md) "Job 4: Tests" previously said 197 (a stale count against a live collection run) and were reconciled to 200 on 2026-07-18 and to 235 on 2026-10-13 (the catalog-procedures port added tests/test_catalog.py).
 
-CI runs the suite twice, for different reasons. `.github/workflows/ci.yml`'s `test` job runs plain `pytest` on Python 3.11 as one of five gating jobs. `.github/workflows/ci-tests-connectors.yml` additionally reinstalls `pycti` from `OpenCTI-Platform/opencti@master` before running on Python 3.12, plus a daily cron, specifically to catch `connectors-sdk`-side pin drift before it reaches a push - see that workflow's header comment for the reasoning.
+CI runs the suite twice, for different reasons. `.github/workflows/ci.yml`'s `test` job runs plain `pytest` on Python 3.11 as one of five gating jobs. `.github/workflows/ci-tests-connectors.yml` additionally runs it on Python 3.12 in an isolated `uv` environment: on pushes and pull requests against the `pycti` and `connectors-sdk` pins in `src/requirements.txt`, and on its daily cron and manual `workflow_dispatch` runs after first reinstalling `pycti` from `OpenCTI-Platform/opencti@master`, specifically to catch `connectors-sdk`-side pin drift without turning every PR red - see that workflow's header comment for the reasoning.
 
 ## Commands
 <!-- source: Makefile (`test:` target), pyproject.toml [tool.pytest.ini_options], tests/test-requirements.txt; verified: read files, ran commands locally; date: 2026-07-18 -->
@@ -90,7 +90,7 @@ All shared fixtures live in [conftest.py](../tests/conftest.py):
 One thing this suite deliberately never mocks: STIX object construction itself. `test_converter_to_stix.py` asserts against real `stix2` objects and real `pycti.*.generate_id` output rather than a mocked mapper - that's what actually catches ID-generation regressions, the property the whole enrichment loop depends on for idempotency (see [docs/architecture.md](architecture.md) §3.7). Only the Whisper HTTP boundary (`responses` library) and the OpenCTI side (`helper` mock) are test doubles.
 
 ## Coverage Targets
-<!-- source: .github/workflows/ci-tests-connectors.yml, tests/test-requirements.txt; verified: read workflow file; date: 2026-07-18 -->
+<!-- source: .github/workflows/ci-tests-connectors.yml, tests/test-requirements.txt; verified: read workflow file and tests/test-requirements.txt; date: 2026-10-16 -->
 
 No numeric coverage threshold is configured anywhere in this repo. `ci-tests-connectors.yml`'s CI job does generate a coverage report (`pytest --cov --cov-append --cov-report=xml`), but nothing consumes it: there's no `--cov-fail-under` and no Codecov upload (dropped deliberately, per that workflow's header comment - there's no `CODECOV_TOKEN` in this repo).
 

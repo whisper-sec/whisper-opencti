@@ -4,24 +4,38 @@
 # ("Tests Connectors") together with the run_test.sh pipeline that its test job
 # invokes. Upstream detects changed connectors, builds a matrix from every
 # tests/test-requirements.txt, then for each project run_test.sh creates an
-# isolated uv venv, installs the project's test requirements, force-installs
-# pycti from OpenCTI master, runs `uv pip check`, and finally pytest.
+# isolated uv venv, installs the project's test requirements, swaps in the
+# connectors-sdk from its own checkout, force-installs pycti from OpenCTI
+# master, runs `uv pip check`, and finally pytest.
 #
 # Adaptations for this single-connector repo (upstream path:
 # internal-enrichment/whisper - here the connector lives at src/ + tests/):
 #   - Dropped the detect-test-files matrix job, build_test_matrix.py,
 #     RELEASE_REF branch resolution, and run_test.sh's git-diff change
 #     detection: there is exactly one connector, so the test job always runs
-#     against tests/test-requirements.txt with RELEASE_REF=master.
+#     against tests/test-requirements.txt.
 #   - run_test.sh's steps are inlined as named workflow steps (same commands,
 #     same order) instead of a shared shell script.
 #   - Triggers are pull_request + push to main/develop (upstream uses monorepo
-#     path filters), PLUS schedule + workflow_dispatch - our addition:
-#     connectors-sdk@master pins an exact pycti version, and when upstream bumps
-#     that pin our src/requirements.txt pycti pin silently drifts. The daily
-#     cron makes `uv pip check` surface that drift without waiting for a push.
-#   - Added a failure-only diagnostic step comparing our pycti pin against the
-#     connectors-sdk@master pin so a drift failure is self-explaining.
+#     path filters), PLUS schedule + workflow_dispatch - our addition.
+#   - The pycti reinstall from OpenCTI master runs only on schedule and
+#     workflow_dispatch, a deliberate departure from run_test.sh. Upstream
+#     tests the connectors-sdk of its own checkout against master pycti. This
+#     repo instead pins connectors-sdk to a commit and pycti to the exact
+#     version that commit declares (src/requirements.txt), so on a pull request
+#     or push the reinstall would only report OpenCTI's release cadence: every
+#     OpenCTI release would turn every unrelated change red until the lockstep
+#     bump of those two lines lands. Therefore:
+#       * pull_request / push test the pins we ship; `uv pip check` and the
+#         tests run against them.
+#       * schedule / workflow_dispatch reinstall pycti from OpenCTI master
+#         first, so `uv pip check` fails once OpenCTI has released a pycti that
+#         the pinned connectors-sdk commit does not declare - the signal to bump
+#         both lines. The daily cron surfaces that without waiting for a push;
+#         a manual dispatch re-checks right after a bump.
+#   - Added a failure-only diagnostic step that says which mode ran and
+#     compares our pycti pin against the connectors-sdk@master pin, so a
+#     failure is self-explaining.
 #   - Dropped the Codecov upload steps (no CODECOV_TOKEN in this repo).
 
 name: Tests Connectors
@@ -30,14 +44,18 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-  # Daily drift gate: catches connectors-sdk@master bumping its pycti pin
-  # (which breaks `uv pip check` here) even when nothing is pushed to this repo.
+  # Daily drift check: the only unattended run that reinstalls pycti from
+  # OpenCTI master. It goes red once master's pycti no longer matches the exact
+  # pin of the connectors-sdk commit we ship, even when nothing is pushed here.
   schedule:
     - cron: '0 6 * * *'
+  # Manual run of the same drift check, e.g. right after a lockstep bump.
   workflow_dispatch:
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  # event_name is part of the key so a push to the default branch cannot cancel
+  # the scheduled drift run, which resolves to the same ref (and vice versa).
+  group: tests-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -50,8 +68,9 @@ jobs:
     name: Test internal-enrichment/whisper
     runs-on: ubuntu-latest
     env:
-      # Upstream resolves RELEASE_REF from the PR base branch; this repo always
-      # tracks upstream master (run_test.sh default: REF="${CIRCLE_TAG:-${RELEASE_REF:-master}}").
+      # Upstream resolves RELEASE_REF from the PR base branch; here it names only
+      # the OpenCTI ref the drift check reinstalls pycti from, always master
+      # (run_test.sh default: REF="${CIRCLE_TAG:-${RELEASE_REF:-master}}").
       RELEASE_REF: master
       VENV_NAME: .temp_venv
 
@@ -77,16 +96,22 @@ jobs:
           source "$VENV_NAME/bin/activate"
           uv pip install -q -r tests/test-requirements.txt
 
+      # Drift check only. A pull_request or push keeps the pycti pinned in
+      # src/requirements.txt, the version that ships.
       - name: Install latest version of pycti
+        id: install_master_pycti
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           source "$VENV_NAME/bin/activate"
           uv pip uninstall pycti
           uv pip install -q "git+https://github.com/OpenCTI-Platform/opencti.git@${RELEASE_REF}#subdirectory=client-python"
           uv pip freeze | grep "connectors-sdk\|pycti" || true
 
-      # The drift gate: connectors-sdk pins an exact pycti version; if the
-      # pycti just installed from OpenCTI master no longer satisfies it,
-      # dependencies are broken and this fails (run_test.sh: `uv pip check || exit 1`).
+      # connectors-sdk pins an exact pycti version. On schedule and
+      # workflow_dispatch the pycti just installed from OpenCTI master is checked
+      # against it, so a newer OpenCTI release fails here: this is the drift
+      # gate. On a pull_request or push it checks the pinned set we ship
+      # (run_test.sh: `uv pip check || exit 1`).
       - name: Check dependency consistency (uv pip check)
         run: |
           source "$VENV_NAME/bin/activate"
@@ -101,17 +126,29 @@ jobs:
           python -m pytest tests --cov --cov-append \
             --cov-report=xml --junitxml="test_outputs/tests/junit.xml" -q -rA  # exit non zero if no test run
 
-      # ---- our addition: make pycti pin drift self-explaining --------------
+      # ---- our addition: make a failure self-explaining ---------------------
 
       - name: Diagnose pycti pin drift
         if: failure()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MASTER_REINSTALL: ${{ steps.install_master_pycti.outcome }}
         run: |
+          if [ "$MASTER_REINSTALL" = skipped ]; then
+            echo "Mode: pins only. This $EVENT_NAME run did not install pycti from OpenCTI master, so this failure is not upstream drift."
+          else
+            echo "Mode: drift check. This $EVENT_NAME run attempted to install pycti from OpenCTI master (step result: $MASTER_REINSTALL)."
+          fi
           echo '::group::pycti pin comparison'
-          echo "Our pin (src/requirements.txt):"
-          grep pycti src/requirements.txt || echo "  (no pycti entry found)"
+          echo "Our pins (src/requirements.txt):"
+          grep -E '^(pycti|connectors-sdk)' src/requirements.txt || echo "  (no pycti or connectors-sdk entry found)"
           echo
           echo "connectors-sdk@master pin (connectors-sdk/pyproject.toml):"
           curl -fsSL https://raw.githubusercontent.com/OpenCTI-Platform/connectors/master/connectors-sdk/pyproject.toml | grep pycti \
             || echo "  (no pycti entry found)"
           echo '::endgroup::'
-          echo "If these versions differ, bump the pycti pin in src/requirements.txt to match connectors-sdk@master (keep the two lines in that file bumped together)."
+          if [ "$MASTER_REINSTALL" = skipped ]; then
+            echo "Fix the change itself: a failing test, or pycti and the connectors-sdk commit in src/requirements.txt disagreeing (bump those two lines together)."
+          else
+            echo "If these versions differ, bump pycti and the connectors-sdk commit in src/requirements.txt together. If they match and uv pip check is what failed, connectors-sdk@master has not caught up with OpenCTI master yet: nothing to bump until it does."
+          fi
